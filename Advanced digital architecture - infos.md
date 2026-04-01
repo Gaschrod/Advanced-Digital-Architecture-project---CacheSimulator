@@ -31,5 +31,24 @@ LRU = really good policy (Least-Recently-Used)
 NMRU: Not MRU
 
 ## Questions to asks/clarification needed
-- Forme des labs
-- 
+- Forme des labs/du rendu final (en dehors du code → on doit faire de la doc pour suivre des labs ?)
+## Steps research
+### 0. How does the simulator works/what does it do?
+Cf. file “docs/cache_simulator_report” for whole docs but basically:
+1. Takes a configuration file + trace file
+2. Generates a memory hierarchy based on the configurations and runs the instructions from the trace file
+
+The cache hierarchy is configurable using YAML (L2 and L3 are optional)
+
+##### Diagrams
+1.Read diagram
+![[Pasted image 20260401143129.png|250]]  
+2.Write diagram
+![[Pasted image 20260401143539.png|300]]
+### 1. Flush instruction in the simulator
+Need to add new operation letter (`F`) in traces maybe also another variant for full flush of the cache (`FA`)
+
+Flush needs to:
+- Find the block in cache
+- Write it back to the next level if it's dirty (regardless of write-back/write-through setting) → goes from L1 to L3 (e.g. if dirty in L2, write to L3)
+- Remote from the level in the cache
