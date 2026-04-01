@@ -42,10 +42,11 @@ The cache hierarchy is configurable using YAML (L2 and L3 are optional)
 
 ##### Diagrams
 1.Read diagram
-![[Pasted image 20260401143129.png|250]]  
+![Write diagram](https://github.com/Gaschrod/Advanced-Digital-Architecture-project---CacheSimulator/blob/master/f064baa2-adde-4e29-b9bf-8e2d37c3346b.png?raw=true)
 2.Write diagram
-![[Pasted image 20260401143539.png|300]]
-### 1. Flush instruction in the simulator
+![Write diagram](https://github.com/Gaschrod/Advanced-Digital-Architecture-project---CacheSimulator/blob/master/1cc6d129-96e0-448f-a5d9-5aee818a7645.png?raw=true)
+http://blob:null/1cc6d129-96e0-448f-a5d9-5aee818a7645
+## 1. Flush instruction in the simulator
 Need to add new operation letter (`F`) in traces maybe also another variant for full flush of the cache (`FA`)
 
 Flush needs to:
