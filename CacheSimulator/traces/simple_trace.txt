@@ -15,11 +15,16 @@
 000000D0 R
 000000E0 R
 000000F0 R
+# Cache is now 'full' (depending on size of block etc.)
 00000000 R
 00000001 R
 00000002 R
 00000003 R
 00000010 R
+00000010 F
+# Cache flushed
+00000010 R
+# Should be a hit but look "deeper" in the levels of cache
 00000014 R
 00000018 R
 0000001C R
