@@ -39,17 +39,67 @@ Cf. file “docs/cache_simulator_report” for whole docs but basically:
 2. Generates a memory hierarchy based on the configurations and runs the instructions from the trace file
 
 The cache hierarchy is configurable using YAML (L2 and L3 are optional)
-
 ##### Diagrams
-1.
-![Read diagram](https://github.com/Gaschrod/Advanced-Digital-Architecture-project---CacheSimulator/blob/main/Pasted%20image%2020260401143129.png?raw=true)
+1.Read diagram
+![[Pasted image 20260401143129.png|250]]  
 2.Write diagram
-![Write diagram](https://github.com/Gaschrod/Advanced-Digital-Architecture-project---CacheSimulator/blob/main/Pasted%20image%2020260401143539.png?raw=true)
-http://blob:null/1cc6d129-96e0-448f-a5d9-5aee818a7645
-## 1. Flush instruction in the simulator
+![[Pasted image 20260401143539.png|300]]
+### 1. Flush instruction in the simulator
 Need to add new operation letter (`F`) in traces maybe also another variant for full flush of the cache (`FA`)
 
 Flush needs to:
 - Find the block in cache
-- Write it back to the next level if it's dirty (regardless of write-back/write-through setting) → goes from L1 to L3 (e.g. if dirty in L2, write to L3)
+- Write it back to memory (even if lower levels are clean, the goal is always to push into memory)
 - Remote from the level in the cache
+
+**NB: will need to comment/document code and functions and cleanup useless comments**
+
+>[!QUESTION] Forced flush or only for dirty blocks?
+>As of now, the flush instruction flush everything from cache onto memory
+>
+>Is this OK or should only dirty bits be flushed to lower level? From read litterature, the better option seems to flush everything (as it isn’t a case of writing over an already occupied block)
+>
+>1. Write-back: a flush must:
+>	- Write dirty blocks all the way down to memory
+>	- Invalidate the block from **all levels** (dirty or clean)
+>2. Write-through: a flush only needs to:
+>	- Invalidate the block from cache levels
+>	- No write-back needed ever
+
+Example of scenario to:
+1. Populate levels of cache
+2. Dirty higher level (L1)
+3. Flush to L2 (now L2 dirty)
+4. Flush L2 so that the ‘new’ data sits in L3
+5. Try a read which will have to look into L3
+```
+# Step 1: Load X into all levels
+000000A0 R       # miss in L1, L2, L3 → data pulled from memory
+                 # result: X in L1, L2, L3
+
+# Step 2: Dirty it in L1
+000000A0 W       # write-back mode → marks X dirty in L1 only
+                 # result: X dirty in L1, clean in L2, L3
+
+# Step 3: Flush X from L1
+000000A0 F       # dirty → writes down to L2 (L2 now has updated data)
+                 # invalidates X from L1
+                 # result: X gone from L1, dirty in L2, stale in L3
+
+# Step 4: Flush X from L2
+000000A0 F       # dirty → writes down to L3 (L3 now has updated data)
+                 # invalidates X from L2
+                 # result: X gone from L1, gone from L2, updated in L3
+
+# Step 5: Read X again → should miss L1 and L2, hit L3
+000000A0 R       # verifies data survived in L3!
+```
+
+
+### 1. New replacement policies
+ Examples: 
+ - NRU
+ - Random
+ - FIFO
+
+As of now, the simulator uses **LRU**
