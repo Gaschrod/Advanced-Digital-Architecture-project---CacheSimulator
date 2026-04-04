@@ -1,4 +1,5 @@
 import math, block, response
+from operator import index
 import pprint
 
 class Cache:
@@ -78,8 +79,6 @@ class Cache:
                     self.data[index][tag] = block.Block(self.block_size, current_step, False, address)
 
         return r
-   
-        
 
     def write(self, address, from_cpu, current_step):
         r = None
@@ -102,12 +101,16 @@ class Cache:
                     r.deepen(self.write_time, self.name)
             
             elif len(in_cache) < self.associativity:
-                #If there is space in this set, create a new block and set its dirty bit to true if this write is coming from the CPU
-                self.data[index][tag] = block.Block(self.block_size, current_step, from_cpu, address)
+
                 if self.write_back:
-                    r = response.Response({self.name:False}, self.write_time)
+                    # Write-allocate: fetch block from lower level first, then write locally
+                    r = self.next_level.read(address, current_step)
+                    r.deepen(self.write_time, self.name)
+                    self.data[index][tag] = block.Block(self.block_size, current_step, True, address)
                 else:
+                    # Write-through + no-write-allocate: just propagate write downward
                     self.logger.info('\tWriting through block ' + address + ' to ' + self.next_level.name)
+                    self.data[index][tag] = block.Block(self.block_size, current_step, from_cpu, address)
                     r = self.next_level.write(address, from_cpu, current_step)
                     r.deepen(self.write_time, self.name)
             
@@ -119,16 +122,20 @@ class Cache:
                         oldest_tag = b
                 if self.write_back:
                     if self.data[index][oldest_tag].is_dirty():
-                        self.logger.info('\tWriting back block ' + address + ' to ' + self.next_level.name)
+                        self.logger.info('\tWriting back block ' + self.data[index][oldest_tag].address + ' to ' + self.next_level.name)
                         r = self.next_level.write(self.data[index][oldest_tag].address, from_cpu, current_step)
                         r.deepen(self.write_time, self.name)
                 else:
                     self.logger.info('\tWriting through block ' + address + ' to ' + self.next_level.name)
                     r = self.next_level.write(address, from_cpu, current_step)
                     r.deepen(self.write_time, self.name)
+                
                 del self.data[index][oldest_tag]
-
-                self.data[index][tag] = block.Block(self.block_size, current_step, from_cpu, address)
+                r_fetch = self.next_level.read(address, current_step)  # write-allocate fetch
+                r_fetch.deepen(self.write_time, self.name)
+                self.data[index][tag] = block.Block(self.block_size, current_step, True, address)
+                r = r_fetch
+    
                 if not r:
                     r = response.Response({self.name:False}, self.write_time)
 
