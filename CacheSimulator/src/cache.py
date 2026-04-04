@@ -180,6 +180,8 @@ class Cache:
                 if index == '':
                     index = '0'
                 self.data[index] = {}
+            if self.next_level.next_level:
+                self.next_level.flush_all(current_step)
         return r
 
     def parse_address(self, address):
