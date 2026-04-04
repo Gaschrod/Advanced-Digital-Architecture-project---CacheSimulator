@@ -137,15 +137,16 @@ class Cache:
     def flush(self, address, current_step):
         r = None
         if not self.next_level:
-            r = response.Response({self.name:True}, self.write_time)
+            # Arrived at main memory
+            r = response.Response({self.name: True}, self.write_time)
         else:
             block_offset, index, tag = self.parse_address(address)
             in_cache = list(self.data[index].keys())
-
             if tag in in_cache:
                 if self.data[index][tag].is_dirty():
                     self.logger.info('\tFlushing block ' + address + ' to ' + self.next_level.name)
-                    r = self.next_level.write(address, False, current_step)
+                    # Recurisvely flush the block down the memory hierarchy
+                    r = self.next_level.flush(address, current_step)
                     r.deepen(self.write_time, self.name)
                 else:
                     r = response.Response({self.name: True}, 0)
@@ -153,33 +154,25 @@ class Cache:
             else:
                 r = self.next_level.flush(address, current_step)
                 r.deepen(self.hit_time, self.name)
-
         return r
     
     def flush_all(self, current_step):
         r = None
         if not self.next_level:
+            # Arrived at main memory
             r = response.Response({self.name:True}, self.write_time)
         else:
+            r = response.Response({self.name:True}, 0)
             for index in self.data.keys():
                 for tag in self.data[index].keys():
+                    address = self.data[index][tag].address
                     if self.data[index][tag].is_dirty():
-                        address = self.data[index][tag].address
                         self.logger.info('\tFlushing block ' + address + ' to ' + self.next_level.name)
-                        temp = self.next_level.write(address, False, current_step)
-                        if r:
-                            r.deepen(temp.time, self.name)
-                        else:
-                            r = response.Response({self.name:True}, self.write_time + temp.time)
+                        temp = self.next_level.flush(address, current_step)
+                        temp.deepen(self.write_time, self.name)
+                        r.time += temp.time
+            # Clear all the blocks in this cache
             self.data = {}
-            for i in range(self.n_sets):
-                index = str(bin(i))[2:].zfill(self.index_size)
-                if index == '':
-                    index = '0'
-                self.data[index] = {}
-
-        if self.next_level and self.next_level.next_level:
-            self.next_level.flush_all(current_step) #recursively flush all blocks in lower levels of the hierarchy as well
         return r
 
     def parse_address(self, address):
