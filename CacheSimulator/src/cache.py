@@ -60,6 +60,8 @@ class Cache:
                 if len(in_cache) < self.associativity:
                     self.data[index][tag] = block.Block(self.block_size, current_step, False, address)
                 else:
+                    # Uses LRU as a policy to replace blocks in the cache when we have a miss and the set is full
+                    
                     #Find the oldest block and replace it
                     oldest_tag = in_cache[0] 
                     for b in in_cache:
@@ -145,9 +147,12 @@ class Cache:
                     self.logger.info('\tFlushing block ' + address + ' to ' + self.next_level.name)
                     r = self.next_level.write(address, False, current_step)
                     r.deepen(self.write_time, self.name)
+                else:
+                    r = response.Response({self.name: True}, 0)
                 del self.data[index][tag]
             else:
-                r = response.Response({self.name:False}, self.hit_time)
+                r = self.next_level.flush(address, current_step)
+                r.deepen(self.hit_time, self.name)
 
         return r
     
@@ -173,6 +178,8 @@ class Cache:
                     index = '0'
                 self.data[index] = {}
 
+        if self.next_level and self.next_level.next_level:
+            self.next_level.flush_all(current_step) #recursively flush all blocks in lower levels of the hierarchy as well
         return r
 
     def parse_address(self, address):
