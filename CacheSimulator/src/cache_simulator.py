@@ -131,13 +131,9 @@ def simulate(hierarchy, trace, logger):
         elif op == 'F':
             logger.info(str(current_step) + ':\tFlushing ' + address)
             r = l1.flush(address, current_step)
-            logger.warning('\thit_list: ' + pprint.pformat(r.hit_list) + '\ttime: ' + str(r.time) + '\n')
-            responses.append(r)
         elif op == 'FA':
             logger.info(str(current_step) + ':\tFlushing all')
             r = l1.flush_all(current_step)
-            logger.warning('\thit_list: ' + pprint.pformat(r.hit_list) + '\ttime: ' + str(r.time) + '\n')
-            responses.append(r)
         else:
             raise cache.InvalidOpError
     logger.info('Simulation complete')
