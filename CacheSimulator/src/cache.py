@@ -137,24 +137,26 @@ class Cache:
     def flush(self, address, current_step):
         r = None
         if not self.next_level:
-            # Arrived at main memory
             r = response.Response({self.name: True}, self.write_time)
         else:
             block_offset, index, tag = self.parse_address(address)
             in_cache = list(self.data[index].keys())
             if tag in in_cache:
                 if self.data[index][tag].is_dirty():
-                    self.logger.info('\tFlushing block ' + address + ' into memory')
-                    # Recurisvely flush the block down the memory hierarchy
+                    # Dirty: pay write cost and propagate
                     r = self.next_level.flush(address, current_step)
                     r.deepen(self.write_time, self.name)
                 else:
-                    r = response.Response({self.name: True}, 0)
-                del self.data[index][tag]
+                    # Clean: still propagate to ensure data reaches memory
+                    # but no write cost at this level
+                    r = self.next_level.flush(address, current_step)
+                    r.deepen(0, self.name)
+                del self.data[index][tag]  # always invalidate
             else:
+                # Not found here, keep propagating
                 r = self.next_level.flush(address, current_step)
                 r.deepen(self.hit_time, self.name)
-        return r
+        return r    
     
     def flush_all(self, current_step):
         r = None
@@ -177,7 +179,7 @@ class Cache:
                 index = str(bin(i))[2:].zfill(self.index_size)
                 if index == '':
                     index = '0'
-            self.data[index] = {}
+                self.data[index] = {}
         return r
 
     def parse_address(self, address):
