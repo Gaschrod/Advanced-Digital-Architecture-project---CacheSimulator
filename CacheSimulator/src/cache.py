@@ -144,7 +144,7 @@ class Cache:
             in_cache = list(self.data[index].keys())
             if tag in in_cache:
                 if self.data[index][tag].is_dirty():
-                    self.logger.info('\tFlushing block ' + address + ' to ' + self.next_level.name)
+                    self.logger.info('\tFlushing block ' + address + ' into memory')
                     # Recurisvely flush the block down the memory hierarchy
                     r = self.next_level.flush(address, current_step)
                     r.deepen(self.write_time, self.name)
@@ -167,7 +167,7 @@ class Cache:
                 for tag in self.data[index].keys():
                     address = self.data[index][tag].address
                     if self.data[index][tag].is_dirty():
-                        self.logger.info('\tFlushing block ' + address + ' to ' + self.next_level.name)
+                        self.logger.info('\tFlushing the whole cache to memory')
                         temp = self.next_level.flush(address, current_step)
                         temp.deepen(self.write_time, self.name)
                         r.time += temp.time
@@ -177,8 +177,8 @@ class Cache:
                 index = str(bin(i))[2:].zfill(self.index_size)
                 if index == '':
                     index = '0'
-                    self.data[index] = {}
-            return r
+            self.data[index] = {}
+        return r
 
     def parse_address(self, address):
         #Calculate our address length and convert the address to binary string
