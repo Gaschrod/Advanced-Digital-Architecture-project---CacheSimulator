@@ -173,7 +173,12 @@ class Cache:
                         r.time += temp.time
             # Clear all the blocks in this cache
             self.data = {}
-        return r
+            for i in range(self.n_sets):
+                index = str(bin(i))[2:].zfill(self.index_size)
+                if index == '':
+                    index = '0'
+                    self.data[index] = {}
+            return r
 
     def parse_address(self, address):
         #Calculate our address length and convert the address to binary string
