@@ -96,12 +96,12 @@ class Cache:
                     # Write-allocate: fetch block from lower level first, then write locally
                     r = self.next_level.read(address, current_step)
                     r.deepen(self.write_time, self.name)
-                    self.data[index][tag] = block.Block(self.block_size, current_step, True, address)
+                    self.data[index][tag] = block.Block(self.block_size, current_step, True, address)                
                 else:
+                    # Write-No-Allocate for write-through policy misses
                     self.logger.info('\tWriting through block ' + address + ' to ' + self.next_level.name)
-                    self.data[index][tag] = block.Block(self.block_size, current_step, from_cpu, address)
                     r = self.next_level.write(address, from_cpu, current_step)
-                    r.deepen(self.write_time, self.name)
+                    r.deepen(self.hit_time, self.name) # Miss penalty to check tags
             
             elif len(in_cache) == self.associativity:
                 # Step 1: Find LRU block
@@ -135,10 +135,6 @@ class Cache:
                     self.logger.info('\tWriting through block ' + address + ' to ' + self.next_level.name)
                     r = self.next_level.write(address, from_cpu, current_step)
                     r.deepen(self.write_time, self.name)
-
-                    # Step 3b: Delete and replace evicted block
-                    del self.data[index][oldest_tag]
-                    self.data[index][tag] = block.Block(self.block_size, current_step, from_cpu, address)
 
         return r
 
