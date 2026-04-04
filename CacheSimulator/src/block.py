@@ -17,4 +17,3 @@ class Block:
 
     def read(self, current_step):
         self.last_accessed = current_step
-

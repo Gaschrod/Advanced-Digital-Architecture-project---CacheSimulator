@@ -80,7 +80,6 @@ class Cache:
         
 
     def write(self, address, from_cpu, current_step):
-        #wat is cache pls
         r = None
         if not self.next_level:
             r = response.Response({self.name:True}, self.write_time)
@@ -133,6 +132,48 @@ class Cache:
 
         return r
 
+    def flush(self, address, current_step):
+        r = None
+        if not self.next_level:
+            r = response.Response({self.name:True}, self.write_time)
+        else:
+            block_offset, index, tag = self.parse_address(address)
+            in_cache = list(self.data[index].keys())
+
+            if tag in in_cache:
+                if self.data[index][tag].is_dirty():
+                    self.logger.info('\tFlushing block ' + address + ' to ' + self.next_level.name)
+                    r = self.next_level.write(address, False, current_step)
+                    r.deepen(self.write_time, self.name)
+                del self.data[index][tag]
+            else:
+                r = response.Response({self.name:False}, self.hit_time)
+
+        return r
+    
+    def flush_all(self, current_step):
+        r = None
+        if not self.next_level:
+            r = response.Response({self.name:True}, self.write_time)
+        else:
+            for index in self.data.keys():
+                for tag in self.data[index].keys():
+                    if self.data[index][tag].is_dirty():
+                        address = self.data[index][tag].address
+                        self.logger.info('\tFlushing block ' + address + ' to ' + self.next_level.name)
+                        temp = self.next_level.write(address, False, current_step)
+                        if r:
+                            r.deepen(temp.time, self.name)
+                        else:
+                            r = response.Response({self.name:True}, self.write_time + temp.time)
+            self.data = {}
+            for i in range(self.n_sets):
+                index = str(bin(i))[2:].zfill(self.index_size)
+                if index == '':
+                    index = '0'
+                self.data[index] = {}
+
+        return r
 
     def parse_address(self, address):
         #Calculate our address length and convert the address to binary string
