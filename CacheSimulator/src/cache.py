@@ -1,10 +1,8 @@
 import math, block, response
-from operator import index
 import pprint
 
 class Cache:
     def __init__(self, name, word_size, block_size, n_blocks, associativity, hit_time, write_time, write_back, logger, next_level=None):
-        #Parameters configured by the user
         self.name = name
         self.word_size = word_size
         self.block_size = block_size
@@ -15,70 +13,66 @@ class Cache:
         self.write_back = write_back
         self.logger = logger
         
-        #Total number of sets in the cache
         self.n_sets = int(n_blocks / associativity)
-        #Dictionary that holds the actual cache data
         self.data = {}
-        
-        #Pointer to the next lowest level of memory
-        #Main memory gets the default None value
         self.next_level = next_level
 
-        #Figure out spans to cut the binary addresses into block_offset, index, and tag
         self.block_offset_size = int(math.log(self.block_size, 2))
         self.index_size = int(math.log(self.n_sets, 2))
 
-        #Initialize the data dictionary
         if next_level:
             for i in range(self.n_sets):
                 index = str(bin(i))[2:].zfill(self.index_size)
                 if index == '':
                     index = '0'
-                self.data[index] = {}   #Create a dictionary of blocks for each set
+                self.data[index] = {}
 
 
     def read(self, address, current_step):
         r = None
-        #Check if this is main memory
-        #Main memory is always a hit
         if not self.next_level:
             r = response.Response({self.name:True}, self.hit_time)
         else:
-            #Parse our address to look through this cache
             block_offset, index, tag = self.parse_address(address)
-
-            #Get the tags in this set
             in_cache = list(self.data[index].keys())
-            #If this tag exists in the set, this is a hit
+
             if tag in in_cache:
+                self.data[index][tag].read(current_step)
                 r = response.Response({self.name:True}, self.hit_time)
             else:
-                #Read from the next level of memory
-                r = self.next_level.read(address, current_step)
-                r.deepen(self.write_time, self.name)
-
-                #If there's space in this set, add this block to it
                 if len(in_cache) < self.associativity:
+                    # No eviction needed, just fetch
+                    r = self.next_level.read(address, current_step)
+                    r.deepen(self.write_time, self.name)
                     self.data[index][tag] = block.Block(self.block_size, current_step, False, address)
                 else:
-                    # Uses LRU as a policy to replace blocks in the cache when we have a miss and the set is full
-                    
-                    #Find the oldest block and replace it
-                    oldest_tag = in_cache[0] 
+                    # Step 1: Find LRU block
+                    oldest_tag = in_cache[0]
                     for b in in_cache:
                         if self.data[index][b].last_accessed < self.data[index][oldest_tag].last_accessed:
                             oldest_tag = b
-                    #Write the block back down if it's dirty and we're using write back
+
+                    # Step 2: Write back dirty block FIRST before fetching new one
+                    writeback_time = 0
                     if self.write_back:
                         if self.data[index][oldest_tag].is_dirty():
-                            self.logger.info('\tWriting back block ' + address + ' to ' + self.next_level.name)
+                            self.logger.info('\tWriting back block ' + self.data[index][oldest_tag].address + ' to ' + self.next_level.name)
                             temp = self.next_level.write(self.data[index][oldest_tag].address, True, current_step)
-                            r.time += temp.time
-                    #Delete the old block and write the new one
+                            writeback_time = temp.time
+
+                    # Step 3: Delete evicted block
                     del self.data[index][oldest_tag]
+
+                    # Step 4: Fetch new block AFTER write-back
+                    r = self.next_level.read(address, current_step)
+                    r.deepen(self.write_time, self.name)
+                    r.time += writeback_time
+
+                    # Step 5: Insert new block
                     self.data[index][tag] = block.Block(self.block_size, current_step, False, address)
 
         return r
+
 
     def write(self, address, from_cpu, current_step):
         r = None
@@ -89,57 +83,65 @@ class Cache:
             in_cache = list(self.data[index].keys())
 
             if tag in in_cache:
-                #Set dirty bit to true if this block was in cache
                 self.data[index][tag].write(current_step)
-
                 if self.write_back:
                     r = response.Response({self.name:True}, self.write_time)
                 else:
-                    #Send to next level cache and deepen results if we have write through
                     self.logger.info('\tWriting through block ' + address + ' to ' + self.next_level.name)
                     r = self.next_level.write(address, from_cpu, current_step)
                     r.deepen(self.write_time, self.name)
             
             elif len(in_cache) < self.associativity:
-
                 if self.write_back:
                     # Write-allocate: fetch block from lower level first, then write locally
                     r = self.next_level.read(address, current_step)
                     r.deepen(self.write_time, self.name)
                     self.data[index][tag] = block.Block(self.block_size, current_step, True, address)
                 else:
-                    # Write-through + no-write-allocate: just propagate write downward
                     self.logger.info('\tWriting through block ' + address + ' to ' + self.next_level.name)
                     self.data[index][tag] = block.Block(self.block_size, current_step, from_cpu, address)
                     r = self.next_level.write(address, from_cpu, current_step)
                     r.deepen(self.write_time, self.name)
             
             elif len(in_cache) == self.associativity:
-                #If this set is full, find the oldest block, write it back if it's dirty, and replace it
+                # Step 1: Find LRU block
                 oldest_tag = in_cache[0]
                 for b in in_cache:
                     if self.data[index][b].last_accessed < self.data[index][oldest_tag].last_accessed:
                         oldest_tag = b
+
                 if self.write_back:
+                    # Step 2a: Write back dirty evicted block FIRST
+                    writeback_time = 0
                     if self.data[index][oldest_tag].is_dirty():
                         self.logger.info('\tWriting back block ' + self.data[index][oldest_tag].address + ' to ' + self.next_level.name)
-                        r = self.next_level.write(self.data[index][oldest_tag].address, from_cpu, current_step)
-                        r.deepen(self.write_time, self.name)
+                        temp = self.next_level.write(self.data[index][oldest_tag].address, from_cpu, current_step)
+                        writeback_time = temp.time
+
+                    # Step 3a: Delete evicted block
+                    del self.data[index][oldest_tag]
+
+                    # Step 4a: Write-allocate fetch AFTER write-back
+                    r = self.next_level.read(address, current_step)
+                    r.deepen(self.write_time, self.name)
+                    r.time += writeback_time
+
+                    # Step 5a: Insert new dirty block
+                    self.data[index][tag] = block.Block(self.block_size, current_step, True, address)
+
                 else:
+                    # Step 2b: Write-through — propagate write downward
+                    # No write-allocate for write-through policy
                     self.logger.info('\tWriting through block ' + address + ' to ' + self.next_level.name)
                     r = self.next_level.write(address, from_cpu, current_step)
                     r.deepen(self.write_time, self.name)
-                
-                del self.data[index][oldest_tag]
-                r_fetch = self.next_level.read(address, current_step)  # write-allocate fetch
-                r_fetch.deepen(self.write_time, self.name)
-                self.data[index][tag] = block.Block(self.block_size, current_step, True, address)
-                r = r_fetch
-    
-                if not r:
-                    r = response.Response({self.name:False}, self.write_time)
+
+                    # Step 3b: Delete and replace evicted block
+                    del self.data[index][oldest_tag]
+                    self.data[index][tag] = block.Block(self.block_size, current_step, from_cpu, address)
 
         return r
+
 
     def flush(self, address, current_step):
         r = None
@@ -150,25 +152,25 @@ class Cache:
             in_cache = list(self.data[index].keys())
             if tag in in_cache:
                 if self.data[index][tag].is_dirty():
-                    # Dirty: pay write cost and propagate
+                    # Dirty: pay write cost and propagate all the way to memory
                     r = self.next_level.flush(address, current_step)
                     r.deepen(self.write_time, self.name)
                 else:
-                    # Clean: still propagate to ensure data reaches memory
+                    # Clean: still propagate to invalidate lower levels
                     # but no write cost at this level
                     r = self.next_level.flush(address, current_step)
                     r.deepen(0, self.name)
                 del self.data[index][tag]  # always invalidate
             else:
-                # Not found here, keep propagating
+                # Not found here, keep propagating down
                 r = self.next_level.flush(address, current_step)
                 r.deepen(self.hit_time, self.name)
-        return r    
-    
+        return r
+
+
     def flush_all(self, current_step):
         r = None
         if not self.next_level:
-            # Arrived at main memory
             r = response.Response({self.name:True}, self.write_time)
         else:
             r = response.Response({self.name:True}, 0)
@@ -176,23 +178,24 @@ class Cache:
                 for tag in self.data[index].keys():
                     address = self.data[index][tag].address
                     if self.data[index][tag].is_dirty():
-                        self.logger.info('\tFlushing the whole cache to memory')
+                        self.logger.info('\tFlushing block ' + address + ' to memory')
                         temp = self.next_level.flush(address, current_step)
                         temp.deepen(self.write_time, self.name)
                         r.time += temp.time
-            # Clear all the blocks in this cache
+            # Reinitialize all sets
             self.data = {}
             for i in range(self.n_sets):
                 index = str(bin(i))[2:].zfill(self.index_size)
                 if index == '':
                     index = '0'
                 self.data[index] = {}
+            # Recursively flush all lower levels
             if self.next_level.next_level:
                 self.next_level.flush_all(current_step)
         return r
 
+
     def parse_address(self, address):
-        #Calculate our address length and convert the address to binary string
         address_size = len(address) * 4
         binary_address = bin(int(address, 16))[2:].zfill(address_size)
 
@@ -202,6 +205,7 @@ class Cache:
             index = '0'
         tag = binary_address[:-(self.block_offset_size+self.index_size)]
         return (block_offset, index, tag)
+
 
 class InvalidOpError(Exception):
     pass
