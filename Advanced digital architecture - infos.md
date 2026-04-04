@@ -66,36 +66,6 @@ Flush needs to:
 >	- Invalidate the block from cache levels
 >	- No write-back needed ever
 
-Example of scenario to:
-1. Populate levels of cache
-2. Dirty higher level (L1)
-3. Flush to L2 (now L2 dirty)
-4. Flush L2 so that the ‘new’ data sits in L3
-5. Try a read which will have to look into L3
-```
-# Step 1: Load X into all levels
-000000A0 R       # miss in L1, L2, L3 → data pulled from memory
-                 # result: X in L1, L2, L3
-
-# Step 2: Dirty it in L1
-000000A0 W       # write-back mode → marks X dirty in L1 only
-                 # result: X dirty in L1, clean in L2, L3
-
-# Step 3: Flush X from L1
-000000A0 F       # dirty → writes down to L2 (L2 now has updated data)
-                 # invalidates X from L1
-                 # result: X gone from L1, dirty in L2, stale in L3
-
-# Step 4: Flush X from L2
-000000A0 F       # dirty → writes down to L3 (L3 now has updated data)
-                 # invalidates X from L2
-                 # result: X gone from L1, gone from L2, updated in L3
-
-# Step 5: Read X again → should miss L1 and L2, hit L3
-000000A0 R       # verifies data survived in L3!
-```
-
-
 ### 1. New replacement policies
  Examples: 
  - NRU
