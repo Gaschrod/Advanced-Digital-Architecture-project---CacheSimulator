@@ -12,7 +12,7 @@ class Cache:
         self.write_time = write_time
         self.write_back = write_back
         self.logger = logger
-        self.policy = str(policy).lower()
+        self.policy = policy
         
         self.n_sets = int(n_blocks / associativity)
         self.data = {}
@@ -84,9 +84,8 @@ class Cache:
     def random_policy(self, index):
         return random.choice(list(self.data[index].keys()))
 
-    def _mark_referenced(self, index, tag):
+    def mark_referenced(self, index, tag):
         self.data[index][tag].referenced = True
-
 
 
     def read(self, address, current_step):
@@ -99,7 +98,7 @@ class Cache:
 
             if tag in in_cache:
                 self.data[index][tag].read(current_step)
-                self._mark_referenced(index, tag)
+                self.mark_referenced(index, tag)
                 r = response.Response({self.name:True}, self.hit_time)
             else:
                 if len(in_cache) < self.associativity:
@@ -107,7 +106,7 @@ class Cache:
                     r = self.next_level.read(address, current_step)
                     r.deepen(self.write_time, self.name)
                     self.data[index][tag] = block.Block(self.block_size, current_step, False, address)
-                    self._mark_referenced(index, tag)
+                    self.mark_referenced(index, tag)
                 else:
                     # Step 1: Find block to evict based on policy
                     oldest_tag = self.eviction(index)
@@ -130,7 +129,7 @@ class Cache:
 
                     # Step 5: Insert new block
                     self.data[index][tag] = block.Block(self.block_size, current_step, False, address)
-                    self._mark_referenced(index, tag)
+                    self.mark_referenced(index, tag)
 
         return r
 
@@ -145,7 +144,7 @@ class Cache:
 
             if tag in in_cache:
                 self.data[index][tag].write(current_step)
-                self._mark_referenced(index, tag)
+                self.mark_referenced(index, tag)
                 if self.write_back:
                     r = response.Response({self.name:True}, self.write_time)
                 else:
@@ -159,7 +158,7 @@ class Cache:
                     r = self.next_level.read(address, current_step)
                     r.deepen(self.write_time, self.name)
                     self.data[index][tag] = block.Block(self.block_size, current_step, True, address)
-                    self._mark_referenced(index, tag)
+                    self.mark_referenced(index, tag)
                 else:
                     # Write-No-Allocate for write-through policy misses
                     self.logger.info('\tWriting through block ' + address + ' to ' + self.next_level.name)
@@ -188,7 +187,7 @@ class Cache:
 
                     # Step 5a: Insert new dirty block
                     self.data[index][tag] = block.Block(self.block_size, current_step, True, address)
-                    self._mark_referenced(index, tag)
+                    self.mark_referenced(index, tag)
 
                 else:
                     # Step 2b: Write-through — propagate write downward
