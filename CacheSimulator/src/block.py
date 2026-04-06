@@ -5,6 +5,7 @@ class Block:
         self.last_accessed = current_step
         self.insertion_time = current_step
         self.address = address
+        self.access_count = 0
 
     def is_dirty(self):
         return self.dirty_bit
@@ -12,9 +13,11 @@ class Block:
     def write(self, current_step):
         self.dirty_bit = True
         self.last_accessed = current_step
+        self.access_count += 1
 
     def clean(self):
         self.dirty_bit = False
 
     def read(self, current_step):
         self.last_accessed = current_step
+        self.access_count += 1
