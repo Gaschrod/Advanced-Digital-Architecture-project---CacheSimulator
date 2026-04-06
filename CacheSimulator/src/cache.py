@@ -12,7 +12,7 @@ class Cache:
         self.write_time = write_time
         self.write_back = write_back
         self.logger = logger
-        self.policy = policy
+        self.policy = str(policy).lower()
         
         self.n_sets = int(n_blocks / associativity)
         self.data = {}
@@ -28,24 +28,64 @@ class Cache:
                     index = '0'
                 self.data[index] = {}
 
-    def eviction(self, index):
-        if self.policy == 'lru':
-            return self.LRU_policy(index)
-        elif self.policy == 'fifo':
-            return self.FIFO_policy(index)
-        elif self.policy == 'random':
-            return self.random_policy(index)
-        else:
-            raise ValueError(f"Unknown eviction policy: {self.policy}")
+    def eviction(self, index):        
+        match self.policy:
+            case 'lru':                
+                return self.LRU_policy(index)
+            case 'mru':
+                return self.MRU_policy(index)
+            case 'lfu':
+                return self.LFU_policy(index)
+            case 'nru':
+                return self.NRU_policy(index)
+            case 'fifo':               
+                return self.FIFO_policy(index)
+            case 'lifo':
+                return self.LIFO_policy(index)
+            case 'filo':
+                return self.FILO_policy(index)
+            case 'random':             
+                return self.random_policy(index)
+            case _:                    
+                raise ValueError(f"Unknown eviction policy: {self.policy}")  
 
     def LRU_policy(self, index):
         return min(self.data[index], key=lambda tag: self.data[index][tag].last_accessed)
+    
+    def MRU_policy(self, index):
+        return max(self.data[index], key=lambda tag: self.data[index][tag].last_accessed)
+    
+    def LFU_policy(self, index):
+        return min(self.data[index], key=lambda tag: self.data[index][tag].access_count)
+    
+    def NRU_policy(self, index):
+        # NRU uses a per-block reference bit: prefer blocks with bit=0.
+        # If all are referenced, clear the set's bits and choose among all blocks.
+        candidates = [
+            tag for tag, blk in self.data[index].items()
+            if not getattr(blk, 'referenced', False)
+        ]
+        if not candidates:
+            for blk in self.data[index].values():
+                blk.referenced = False
+            candidates = list(self.data[index].keys())
+
+        return min(candidates, key=lambda tag: self.data[index][tag].insertion_time)
 
     def FIFO_policy(self, index):
         return min(self.data[index], key=lambda tag: self.data[index][tag].insertion_time)
+    
+    def LIFO_policy(self, index):
+        return max(self.data[index], key=lambda tag: self.data[index][tag].insertion_time)
+
+    def FILO_policy(self, index):
+        return max(self.data[index], key=lambda tag: self.data[index][tag].insertion_time)
 
     def random_policy(self, index):
         return random.choice(list(self.data[index].keys()))
+
+    def _mark_referenced(self, index, tag):
+        self.data[index][tag].referenced = True
 
 
 
@@ -59,6 +99,7 @@ class Cache:
 
             if tag in in_cache:
                 self.data[index][tag].read(current_step)
+                self._mark_referenced(index, tag)
                 r = response.Response({self.name:True}, self.hit_time)
             else:
                 if len(in_cache) < self.associativity:
@@ -66,6 +107,7 @@ class Cache:
                     r = self.next_level.read(address, current_step)
                     r.deepen(self.write_time, self.name)
                     self.data[index][tag] = block.Block(self.block_size, current_step, False, address)
+                    self._mark_referenced(index, tag)
                 else:
                     # Step 1: Find block to evict based on policy
                     oldest_tag = self.eviction(index)
@@ -88,6 +130,7 @@ class Cache:
 
                     # Step 5: Insert new block
                     self.data[index][tag] = block.Block(self.block_size, current_step, False, address)
+                    self._mark_referenced(index, tag)
 
         return r
 
@@ -102,6 +145,7 @@ class Cache:
 
             if tag in in_cache:
                 self.data[index][tag].write(current_step)
+                self._mark_referenced(index, tag)
                 if self.write_back:
                     r = response.Response({self.name:True}, self.write_time)
                 else:
@@ -114,7 +158,8 @@ class Cache:
                     # Write-allocate: fetch block from lower level first, then write locally
                     r = self.next_level.read(address, current_step)
                     r.deepen(self.write_time, self.name)
-                    self.data[index][tag] = block.Block(self.block_size, current_step, True, address)                
+                    self.data[index][tag] = block.Block(self.block_size, current_step, True, address)
+                    self._mark_referenced(index, tag)
                 else:
                     # Write-No-Allocate for write-through policy misses
                     self.logger.info('\tWriting through block ' + address + ' to ' + self.next_level.name)
@@ -143,6 +188,7 @@ class Cache:
 
                     # Step 5a: Insert new dirty block
                     self.data[index][tag] = block.Block(self.block_size, current_step, True, address)
+                    self._mark_referenced(index, tag)
 
                 else:
                     # Step 2b: Write-through — propagate write downward
