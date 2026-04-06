@@ -8,12 +8,15 @@ def main():
     parser = argparse.ArgumentParser(description='Simulate a cache')
     parser.add_argument('-c','--config-file', help='Configuration file for the memory heirarchy', required=True)
     parser.add_argument('-t', '--trace-file', help='Tracefile containing instructions', required=True)
+    parser.add_argument('-p', '--policy', help='Eviction policy to use (lru, fifo, random)', required=False, default='LRU')
     parser.add_argument('-l', '--log-file', help='Log file name', required=False)
-    parser.add_argument('-p', '--pretty', help='Use pretty colors', required=False, action='store_true')
+    parser.add_argument('-b', '--beautify', help='Use colors', required=False, action='store_true')
     parser.add_argument('-d', '--draw-cache', help='Draw cache layouts', required=False, action='store_true')
     arguments = vars(parser.parse_args())
     
-    if arguments['pretty']:
+    policy = arguments['policy']
+    
+    if arguments['beautify']:
         import colorer
 
     log_filename = 'cache_simulator.log'
@@ -38,7 +41,7 @@ def main():
     logger.info('Loading config...')
     config_file = open(arguments['config_file'])
     configs = yaml.safe_load(config_file)
-    hierarchy = build_hierarchy(configs, logger)
+    hierarchy = build_hierarchy(configs, logger, policy)
     logger.info('Memory hierarchy built.')
 
     logger.info('Loading tracefile...')
@@ -132,7 +135,7 @@ def simulate(hierarchy, trace, logger):
             logger.info(str(current_step) + ':\tFlushing ' + address)
             r = l1.flush(address, current_step)
             logger.info('\n')
-        elif op == 'FA':
+        elif op == 'FA': # Doesn't care about the address which is a placeholder anyway
             logger.info(str(current_step) + ':\tFlushing all')
             r = l1.flush_all(current_step)
             logger.info('\n')
@@ -185,27 +188,27 @@ def compute_amat(level, responses, logger, results={}):
     return results
 
 
-def build_hierarchy(configs, logger):
+def build_hierarchy(configs, logger, policy):
     #Build the cache hierarchy with the given configuration
     hierarchy = {}
     #Main memory is required
-    main_memory = build_cache(configs, 'mem', None, logger)
+    main_memory = build_cache(configs, 'mem', None, logger, policy)
     prev_level = main_memory
     hierarchy['mem'] = main_memory
     if 'cache_3' in configs.keys():
-        cache_3 = build_cache(configs, 'cache_3', prev_level, logger)
+        cache_3 = build_cache(configs, 'cache_3', prev_level, logger, policy)
         prev_level = cache_3
         hierarchy['cache_3'] = cache_3
     if 'cache_2' in configs.keys():
-        cache_2 = build_cache(configs, 'cache_2', prev_level, logger)
+        cache_2 = build_cache(configs, 'cache_2', prev_level, logger, policy)
         prev_level = cache_2
         hierarchy['cache_2'] = cache_2
     #Cache_1 is required
-    cache_1 = build_cache(configs, 'cache_1', prev_level, logger)
+    cache_1 = build_cache(configs, 'cache_1', prev_level, logger, policy)
     hierarchy['cache_1'] = cache_1
     return hierarchy
 
-def build_cache(configs, name, next_level_cache, logger):
+def build_cache(configs, name, next_level_cache, logger, policy):
 
     return cache.Cache(name,
                 configs['architecture']['word_size'],
@@ -216,7 +219,8 @@ def build_cache(configs, name, next_level_cache, logger):
                 configs[name]['hit_time'],
                 configs['architecture']['write_back'],
                 logger,
-                next_level_cache)
+                next_level_cache,
+                policy)
 
 
 if __name__ == '__main__':

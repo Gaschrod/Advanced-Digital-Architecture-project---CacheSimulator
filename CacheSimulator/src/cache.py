@@ -1,8 +1,8 @@
-import math, block, response
+import math, block, response, random
 import pprint
 
 class Cache:
-    def __init__(self, name, word_size, block_size, n_blocks, associativity, hit_time, write_time, write_back, logger, next_level=None):
+    def __init__(self, name, word_size, block_size, n_blocks, associativity, hit_time, write_time, write_back, logger, next_level=None, policy='LRU'):
         self.name = name
         self.word_size = word_size
         self.block_size = block_size
@@ -12,6 +12,7 @@ class Cache:
         self.write_time = write_time
         self.write_back = write_back
         self.logger = logger
+        self.policy = policy
         
         self.n_sets = int(n_blocks / associativity)
         self.data = {}
@@ -26,6 +27,26 @@ class Cache:
                 if index == '':
                     index = '0'
                 self.data[index] = {}
+
+    def eviction(self, index):
+        if self.policy == 'lru':
+            return self.LRU_policy(index)
+        elif self.policy == 'fifo':
+            return self.FIFO_policy(index)
+        elif self.policy == 'random':
+            return self.random_policy(index)
+        else:
+            raise ValueError(f"Unknown eviction policy: {self.policy}")
+
+    def LRU_policy(self, index):
+        return min(self.data[index], key=lambda tag: self.data[index][tag].last_accessed)
+
+    def FIFO_policy(self, index):
+        return min(self.data[index], key=lambda tag: self.data[index][tag].insertion_time)
+
+    def random_policy(self, index):
+        return random.choice(list(self.data[index].keys()))
+
 
 
     def read(self, address, current_step):
@@ -46,11 +67,8 @@ class Cache:
                     r.deepen(self.write_time, self.name)
                     self.data[index][tag] = block.Block(self.block_size, current_step, False, address)
                 else:
-                    # Step 1: Find LRU block
-                    oldest_tag = in_cache[0]
-                    for b in in_cache:
-                        if self.data[index][b].last_accessed < self.data[index][oldest_tag].last_accessed:
-                            oldest_tag = b
+                    # Step 1: Find block to evict based on policy
+                    oldest_tag = self.eviction(index)
 
                     # Step 2: Write back dirty block FIRST before fetching new one
                     writeback_time = 0
@@ -104,11 +122,8 @@ class Cache:
                     r.deepen(self.hit_time, self.name) # Miss penalty to check tags
             
             elif len(in_cache) == self.associativity:
-                # Step 1: Find LRU block
-                oldest_tag = in_cache[0]
-                for b in in_cache:
-                    if self.data[index][b].last_accessed < self.data[index][oldest_tag].last_accessed:
-                        oldest_tag = b
+                # Step 1: Find block to evict based on policy
+                oldest_tag = self.eviction(index)
 
                 if self.write_back:
                     # Step 2a: Write back dirty evicted block FIRST
@@ -189,7 +204,6 @@ class Cache:
             if self.next_level.next_level:
                 self.next_level.flush_all(current_step)
         return r
-
 
     def parse_address(self, address):
         address_size = len(address) * 4
