@@ -8,7 +8,7 @@ def main():
     parser = argparse.ArgumentParser(description='Simulate a cache')
     parser.add_argument('-c','--config-file', help='Configuration file for the memory heirarchy', required=True)
     parser.add_argument('-t', '--trace-file', help='Tracefile containing instructions', required=True)
-    parser.add_argument('-p', '--policy', help='Eviction policy to use (lru, fifo, random)', required=False, default='LRU')
+    parser.add_argument('-p', '--policy', choices=['lru', 'fifo', 'random'], help='Eviction policy to use (LRU, FIFO, random)', type=str.lower, required=False, default='LRU')
     parser.add_argument('-l', '--log-file', help='Log file name', required=False)
     parser.add_argument('-b', '--beautify', help='Use colors', required=False, action='store_true')
     parser.add_argument('-d', '--draw-cache', help='Draw cache layouts', required=False, action='store_true')
