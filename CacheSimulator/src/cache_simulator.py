@@ -47,7 +47,7 @@ def main():
     logger.info('Loading tracefile...')
     trace_file = open(arguments['trace_file'])
     trace = trace_file.read().splitlines()
-    trace = [item for item in trace if not item.startswith('#')]
+    trace = [item for item in trace if item.strip() and not item.startswith('#')]
     logger.info('Loaded tracefile ' + arguments['trace_file'])
     logger.info('Begin simulation!')
     simulate(hierarchy, trace, logger)
@@ -135,12 +135,14 @@ def simulate(hierarchy, trace, logger):
             logger.info(str(current_step) + ':\t[' + actor + '] Reading ' + address)
             r = l1.read(address, current_step)
             r.actor = actor
+            r.address = address
             logger.warning('\thit_list: ' + pprint.pformat(r.hit_list) + '\ttime: ' + str(r.time) + '\n')
             responses.append(r)
         elif op == 'W':
             logger.info(str(current_step) + ':\t[' + actor + '] Writing ' + address)
             r = l1.write(address, True, current_step)
             r.actor = actor
+            r.address = address
             logger.warning('\thit_list: ' + pprint.pformat(r.hit_list) + '\ttime: ' + str(r.time) + '\n')
             responses.append(r)
         elif op == 'F':
@@ -197,9 +199,9 @@ def compute_amat(level, responses, logger, results={}):
             miss_rate = float(n_miss)/n_access
             #Recursively compute the AMAT of this level of cache by computing
             #the AMAT of lower levels
-            results[level.name] = level.hit_time + miss_rate * compute_amat(level.next_level, responses, logger)[level.next_level.name] #wat
+            results[level.name] = round(level.hit_time + miss_rate * compute_amat(level.next_level, responses, logger)[level.next_level.name],2)
         else:
-            results[level.name] = 0 * compute_amat(level.next_level, responses, logger)[level.next_level.name] #trust me, this is good
+            results[level.name] = round(0 * compute_amat(level.next_level, responses, logger)[level.next_level.name],2)
 
         logger.info(level.name)
         logger.info('\tNumber of accesses: ' + str(n_access))
@@ -222,7 +224,7 @@ def analyze_prime_probe(l1, attacker_responses, logger):
         # A miss on probe means the victim evicted the attacker's line
         hit_in_l1 = probe_r.hit_list.get('cache_1', False)
         status = 'HIT  (set untouched)' if hit_in_l1 else 'MISS (victim accessed this set!)'
-        logger.info('\tProbe address: ' + str(probe_r) + ' -> ' + status)
+        logger.info('\tProbe address: ' + str(probe_r.address) + ' -> ' + status)
         if not hit_in_l1:
             compromised_sets.append(probe_r)
 

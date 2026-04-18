@@ -104,8 +104,8 @@ def generate_trace(geometry, target_set=None):
         probe_lines.append(f"# --- Set {s} ---")
         for w in range(associativity):
             addr = make_address(s, w, offset_bits, index_bits)
-            prime_lines.append(f"{addr} R ATTACKER  # set {s}, way {w}")
-            probe_lines.append(f"{addr} R ATTACKER  # set {s}, way {w}")
+            prime_lines.append(f"{addr} R ATTACKER")
+            probe_lines.append(f"{addr} R ATTACKER")
 
     # Victim placeholder — one line per target set as a guide
     victim_lines.append("# Replace these lines with your actual victim accesses.")
