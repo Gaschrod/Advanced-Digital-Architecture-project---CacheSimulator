@@ -4,9 +4,9 @@
 1. You will need to implement some kind of flush instruction in the simulator to use in the trace workload
 2. You will need to implement new replacements policies i.e. NRU, random & FIFO
 3. The attack that you will implement for the labs will be:
-	A. Flush & Flush
+	A. Prime & Probe
     B . Flush & Reload
-    C. Prime & Probe
+    C. Flush & Flush
 4. Implement a multi-core version of the cache simulator (private L1 cache per core) which requires cache coherence and consistency 
 	A. We recommend you to use directory-based cache coherence protocol with Modified Shared Invalid (MSI) states
 5. Finally, some kind of graphical user interface to help the students handle the simulator easily
@@ -157,19 +157,24 @@ With trashing (trying to read 3 blocks one after the other with only 2 sets):
  - [x] Least frequently used (LFU)
 
 <u>Optional:</u>
- - [ ] Last in first out (LIFO)
- - [ ] First in last out (FILO)
- - [ ] Not recently used (NRU)
+ - [x] Last in first out (LIFO)
+ - [x] First in last out (FILO)
+ - [x] Not recently used (NRU)
 
 As of now, the simulator uses **LRU**
 ### 3. Attack to implement
-- A. Flush & Flush
+- A. Prime & Probe
 - B. Flush & Reload
-- C. Prime & Probe
+- C. Flush & Flush
 #### Prime & Probe
 How it works:
 - Priming phase: The attacker occupies all cache sets with attacker data.
 - Probe phase: The attacker measures access time to figure out which set of data was accessed by the victim.
+
+To better understand the attack: https://security.stackexchange.com/questions/213212/cache-side-channels-prime-probe-attack
+
+<u>Important for the documentation: a VICTIM operation on the exact same block wouldn’t be detected, only an operation on another block of the same set</u>
+Reason: even with a write, the block is only marked as “dirty” but this isn’t taken into account by the attacker thus he won’t see a difference if the data is different but the block is the same
 ##### Flush & Reload
 Targets the Last-Level Cache (would be L3 with the “most advanced config” of the simulator). 
 Thus, the attacker and the victim don’t need to share the execution core
@@ -190,6 +195,8 @@ A round of attack consists of three phases:
 #### Flush & Flush
 Interesting reads:
 - [Flush+Flush: A Stealthier Last-Level Cache Attack](https://arxiv.org/pdf/1511.04594v1)
+
+Important: as of now, the instruction “Flush” in the simulator **doesn’t have a measured time** (would need to be implemented and take into consideration different timing whether there is data to flush or not → already in memory)
 
 Only relies on the **execution time of the flush instruction**, that depends on whether the data is cached or not
 - If no data cached, flush is fast → abort early in case of miss
