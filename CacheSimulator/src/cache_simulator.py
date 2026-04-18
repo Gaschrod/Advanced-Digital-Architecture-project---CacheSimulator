@@ -73,8 +73,8 @@ def print_cache(cache):
             ways.append("Way " + str(way_no))
             way_no += 1
         
-        #Print either all the sets if the cache is small, or just a few
-        #sets and then the last set
+        # Print either all the sets if the cache is small, or just a few
+        # sets and then the last set
         sets.append(ways)
         if len(set_indexes) > table_size + 4 - 1:
             for s in range(min(table_size, len(set_indexes) - 4)):
@@ -109,8 +109,7 @@ def print_cache(cache):
         print ("\n")
         print (table.table)
 
-#Loop through the instructions in the tracefile and use
-#the given memory hierarchy to find AMAT
+# Loop through the instructions in the tracefile and use the given memory hierarchy to find AMAT (Average Memory Access Time)
 def simulate(hierarchy, trace, logger):
     responses = []
     #We only interface directly with L1. Reads and writes will automatically
@@ -118,25 +117,38 @@ def simulate(hierarchy, trace, logger):
     l1 = hierarchy['cache_1']
     for current_step in range(len(trace)):
         instruction = trace[current_step]
-        address, op = instruction.split()
+
+        parts = instruction.split()
+        if len(parts) == 3:
+            address, op, actor = parts # Actor = ATTACKER or VICTIM
+            if actor not in ['ATTACKER', 'VICTIM']:
+                raise cache.InvalidOpError
+        elif len(parts) == 2: # Possible to use cache simulator without attacker/victim roles (base case)
+            address, op = parts
+            actor = 'UNKNOWN'
+        else:
+            raise cache.InvalidOpError
+
+
         #Call read for this address on our memory hierarchy
         if op == 'R':
-            logger.info(str(current_step) + ':\tReading ' + address)
+            logger.info(str(current_step) + ':\t[' + actor + '] Reading ' + address)
             r = l1.read(address, current_step)
+            r.actor = actor
             logger.warning('\thit_list: ' + pprint.pformat(r.hit_list) + '\ttime: ' + str(r.time) + '\n')
             responses.append(r)
-        #Call write
         elif op == 'W':
-            logger.info(str(current_step) + ':\tWriting ' + address)
+            logger.info(str(current_step) + ':\t[' + actor + '] Writing ' + address)
             r = l1.write(address, True, current_step)
+            r.actor = actor
             logger.warning('\thit_list: ' + pprint.pformat(r.hit_list) + '\ttime: ' + str(r.time) + '\n')
             responses.append(r)
         elif op == 'F':
-            logger.info(str(current_step) + ':\tFlushing ' + address)
+            logger.info(str(current_step) + ':\t[' + actor + '] Flushing ' + address)
             r = l1.flush(address, current_step)
             logger.info('\n')
         elif op == 'FA': # Doesn't care about the address which is a placeholder anyway
-            logger.info(str(current_step) + ':\tFlushing all')
+            logger.info(str(current_step) + ':\t[' + actor + '] Flushing all')
             r = l1.flush_all(current_step)
             logger.info('\n')
         else:
@@ -145,17 +157,25 @@ def simulate(hierarchy, trace, logger):
     analyze_results(hierarchy, responses, logger)
 
 def analyze_results(hierarchy, responses, logger):
-    #Parse all the responses from the simulation
     n_instructions = len(responses)
+    total_time = sum(r.time for r in responses)
 
-    total_time = 0
-    for r in responses:
-        total_time += r.time
     logger.info('\nNumber of instructions: ' + str(n_instructions))
     logger.info('\nTotal cycles taken: ' + str(total_time) + '\n')
 
+    # Split by actor
+    attacker_responses = [r for r in responses if r.actor == 'ATTACKER']
+    victim_responses   = [r for r in responses if r.actor == 'VICTIM']
+
+    # Standard AMAT on all responses
     amat = compute_amat(hierarchy['cache_1'], responses, logger)
-    logger.info('\nAMATs:\n'+pprint.pformat(amat))
+    logger.info('\nAMATs:\n' + pprint.pformat(amat))
+
+    # Prime & Probe report — only if both actors are present
+    if attacker_responses and victim_responses:
+        logger.info('\n=== Prime & Probe Analysis ===')
+        analyze_prime_probe(hierarchy['cache_1'], attacker_responses, logger)
+
 
 def compute_amat(level, responses, logger, results={}):
     #Check if this is main memory
@@ -187,6 +207,26 @@ def compute_amat(level, responses, logger, results={}):
         logger.info('\tNumber of misses: ' + str(n_miss))
     return results
 
+def analyze_prime_probe(l1, attacker_responses, logger):
+    # The trace template guarantees: first N are prime, last N are probe
+    # (N = total attacker accesses / 2)
+    mid = len(attacker_responses) // 2
+    prime_responses = attacker_responses[:mid]
+    probe_responses = attacker_responses[mid:]
+
+    logger.info('Probe results (miss = victim accessed that set):')
+    compromised_sets = []
+
+    for prime_r, probe_r in zip(prime_responses, probe_responses):
+        # Get the address from the probe response's hit_list context
+        # A miss on probe means the victim evicted the attacker's line
+        hit_in_l1 = probe_r.hit_list.get('cache_1', False)
+        status = 'HIT  (set untouched)' if hit_in_l1 else 'MISS (victim accessed this set!)'
+        logger.info('\tProbe address: ' + str(probe_r) + ' -> ' + status)
+        if not hit_in_l1:
+            compromised_sets.append(probe_r)
+
+    logger.info('\nSets likely accessed by victim: ' + str(len(compromised_sets)))
 
 def build_hierarchy(configs, logger, policy):
     #Build the cache hierarchy with the given configuration
