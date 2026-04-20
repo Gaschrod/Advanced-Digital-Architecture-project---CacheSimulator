@@ -1,0 +1,30 @@
+# Multi-core MSI coherence test trace
+# Format: <core_id> <address> <operation> [ATTACKER|VICTIM]
+#
+# Test 1: Read Sharing (both cores share same block)
+0 00000000 R
+1 00000000 R
+0 00000000 R
+# Expected: Core 0 miss→S, Core 1 miss→S (both share), Core 0 hit in S
+
+# Test 2: Write Invalidation (Core 0 upgrades S→M, invalidates Core 1)
+0 00000000 W
+1 00000000 R
+# Expected: Core 0 S→M (invalidate Core 1), Core 1 miss (Core 0 intervenes M→S)
+
+# Test 3: Modified Intervention (Core 0 has M, Core 1 reads)
+0 00000010 W
+1 00000010 R
+# Expected: Core 0 miss→M, Core 1 miss (Core 0 supplies data, both→S)
+
+# Test 4: Different addresses (no coherence conflicts)
+0 00000020 R
+1 00000030 R
+0 00000020 R
+1 00000030 R
+# Expected: All local operations, no coherence traffic
+
+# Test 5: Write-Write conflict
+0 00000040 W
+1 00000040 W
+# Expected: Core 0 miss→M, Core 1 miss (invalidate Core 0, Core 1→M)
