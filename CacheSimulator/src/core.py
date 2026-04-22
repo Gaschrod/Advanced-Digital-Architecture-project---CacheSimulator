@@ -63,6 +63,27 @@ class Core:
             self.logger.info(f'\t[Core {self.core_id}] L1 miss, requesting exclusive via bus')
             return self.bus.coherent_write(self.core_id, address, current_step)
 
+    def flush(self, address, current_step):
+        """Flush a single block from L1 and notify the directory."""
+        state = self.l1_cache.get_coherence_state(address)
+        r = self.l1_cache.flush(address, current_step)
+        if state != 'I':
+            self.bus.directory.process_eviction(self.core_id, address, state == 'M')
+        return r
+
+    def flush_all(self, current_step):
+        """Flush all blocks from L1 and notify the directory for each."""
+        blocks = [
+            (blk.address, blk.get_coherence_state(), blk.is_dirty())
+            for index in self.l1_cache.data
+            for blk in self.l1_cache.data[index].values()
+        ]
+        r = self.l1_cache.flush_all(current_step)
+        for addr, state, is_dirty in blocks:
+            if state != 'I':
+                self.bus.directory.process_eviction(self.core_id, addr, is_dirty)
+        return r
+
     def handle_bus_read(self, address, requesting_core_id):
         """Handle BusRd request from another core (coherence callback)
 

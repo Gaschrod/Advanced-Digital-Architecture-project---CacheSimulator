@@ -405,12 +405,12 @@ def simulate_multicore(hierarchy, trace, logger):
 
         elif op == 'F':
             logger.info(f"{current_step}:\t[Core {core_id}] [{actor}] Flushing {address}")
-            r = target_core.l1_cache.flush(address, current_step)
+            r = target_core.flush(address, current_step)
             logger.info('\n')
 
         elif op == 'FA':
             logger.info(f"{current_step}:\t[Core {core_id}] [{actor}] Flushing all")
-            r = target_core.l1_cache.flush_all(current_step)
+            r = target_core.flush_all(current_step)
             logger.info('\n')
 
         else:

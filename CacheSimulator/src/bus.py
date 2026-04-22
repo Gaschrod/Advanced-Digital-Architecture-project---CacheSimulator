@@ -55,7 +55,11 @@ class Bus:
 
         # Install block in requesting core's cache in Shared state
         requesting_core = self.cores[core_id]
-        requesting_core.l1_cache.install_block(address, 'S', current_step)
+        eviction = requesting_core.l1_cache.install_block(address, 'S', current_step)
+        if eviction is not None:
+            evicted_addr, evicted_state, evicted_dirty, wb_time = eviction
+            total_time += wb_time
+            self.directory.process_eviction(core_id, evicted_addr, evicted_dirty)
 
         # Return response (miss at L1, but fetched successfully)
         return response.Response({f'core_{core_id}_L1': False}, total_time)
@@ -95,7 +99,11 @@ class Bus:
 
         # Install block in Modified state
         requesting_core = self.cores[core_id]
-        requesting_core.l1_cache.install_block(address, 'M', current_step)
+        eviction = requesting_core.l1_cache.install_block(address, 'M', current_step)
+        if eviction is not None:
+            evicted_addr, evicted_state, evicted_dirty, wb_time = eviction
+            total_time += wb_time
+            self.directory.process_eviction(core_id, evicted_addr, evicted_dirty)
 
         # Return response (miss at L1)
         return response.Response({f'core_{core_id}_L1': False}, total_time)

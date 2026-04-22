@@ -264,6 +264,7 @@ class Cache:
         return (block_offset, index, tag)
 
     # ==================== Coherence Methods for Multi-Core ====================
+    # Implemented with reference to wikipedia MSI protocol and directory based cache coherence pages.
 
     def get_coherence_state(self, address):
         """Get coherence state of a block ('M', 'S', or 'I')"""
@@ -302,25 +303,36 @@ class Cache:
             self.data[index][tag].set_coherence_state('M')
 
     def install_block(self, address, coherence_state, current_step):
-        """Install a new block with given coherence state"""
+        """Install a new block with given coherence state.
+
+        Returns (evicted_address, evicted_state, evicted_is_dirty, writeback_time)
+        if a block was evicted, otherwise None.
+        """
         block_offset, index, tag = self.parse_address(address)
 
-        # May need eviction if set is full
+        eviction_result = None
         if len(self.data[index]) >= self.associativity:
             oldest_tag = self.eviction(index)
+            evicted = self.data[index][oldest_tag]
+            evicted_address = evicted.address
+            evicted_state  = evicted.get_coherence_state()
+            evicted_dirty  = evicted.is_dirty()
 
-            # Write back dirty block if needed
-            if self.write_back and self.data[index][oldest_tag].is_dirty():
-                self.logger.info(f'\t[Core {self.core_id} L1] Evicting dirty block {self.data[index][oldest_tag].address}')
-                # In multi-core, eviction should notify directory (handled by core/bus layer)
+            writeback_time = 0
+            if self.write_back and evicted_dirty:
+                self.logger.info(f'\t[Core {self.core_id} L1] Evicting dirty block {evicted_address} (write-back to L2)')
+                wb = self.next_level.write(evicted_address, True, current_step)
+                writeback_time = wb.time
 
             del self.data[index][oldest_tag]
+            eviction_result = (evicted_address, evicted_state, evicted_dirty, writeback_time)
 
         # Install new block
         dirty = (coherence_state == 'M')
         self.data[index][tag] = block.Block(self.block_size, current_step, dirty, address, coherence_state)
         self.mark_referenced(index, tag)
         self.logger.info(f'\t[Core {self.core_id} L1] Installed {address} in state {coherence_state}')
+        return eviction_result
 
     def supply_data(self, address):
         """Supply data to another cache (coherence callback for intervention)"""
