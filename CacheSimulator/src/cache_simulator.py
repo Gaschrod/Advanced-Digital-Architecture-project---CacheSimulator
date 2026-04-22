@@ -254,7 +254,8 @@ def analyze_flush_reload(hierarchy, responses, logger):
     
     flush_addresses = {r.address for r in responses if r.actor == 'ATTACKER' and getattr(r, 'flush_hit', None) is not None}
     attacker_reads = [r for r in responses if r.actor == 'ATTACKER' and r.address in flush_addresses and getattr(r, 'flush_hit', None) is not None and r.address in flush_addresses]
-
+	
+    llc_name = get_llc_name(hierarchy)
     for r in attacker_reads:
         hit_in_llc = llc_name in r.hit_list
         hit_in_any_cache = any(c in r.hit_list for c in hierarchy if c != 'mem')
