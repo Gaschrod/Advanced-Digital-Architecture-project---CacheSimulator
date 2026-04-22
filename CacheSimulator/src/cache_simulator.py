@@ -112,8 +112,7 @@ def print_cache(cache):
 # Loop through the instructions in the tracefile and use the given memory hierarchy to find AMAT (Average Memory Access Time)
 def simulate(hierarchy, trace, logger):
     responses = []
-    #We only interface directly with L1. Reads and writes will automatically
-    #interact with lower levels of the hierarchy
+    # We only interface directly with L1. Reads and writes will automatically interact with lower levels of the hierarchy
     l1 = hierarchy['cache_1']
     for current_step in range(len(trace)):
         instruction = trace[current_step]
@@ -148,7 +147,10 @@ def simulate(hierarchy, trace, logger):
         elif op == 'F':
             logger.info(str(current_step) + ':\t[' + actor + '] Flushing ' + address)
             r = l1.flush(address, current_step)
-            logger.info('\n')
+            r.actor = actor
+            r.address = address
+            logger.warning('\thit_list: ' + pprint.pformat(r.hit_list) + '\ttime: ' + str(r.time) + '\tflush_hit: ' + str(r.flush_hit) + '\n')
+            responses.append(r)
         elif op == 'FA': # Doesn't care about the address which is a placeholder anyway
             logger.info(str(current_step) + ':\t[' + actor + '] Flushing all')
             r = l1.flush_all(current_step)
