@@ -211,17 +211,19 @@ class Cache:
             block_offset, index, tag = self.parse_address(address)
             in_cache = list(self.data[index].keys())
             if tag in in_cache:
-                r = self.next_level.flush(address, current_step)
-                # HIT: pay full flush cost regardless of dirty/clean -> already taken into account in flush_hit_time
-                r.deepen(self.flush_hit_time, self.name)
-                r.flush_hit = True
+                if self.data[index][tag].is_dirty():
+                    r = self.next_level.flush(address, current_step)
+                    r.deepen(self.write_time, self.name)
+                else:
+                    r = self.next_level.flush(address, current_step)
+                    r.deepen(0, self.name)
+                r.hit_list[self.name] = True # If data was present in this cache, we consider it a hit for the purpose of timing analysis
                 del self.data[index][tag]
             else:
-                # MISS: early abort, only tag-check cost
                 r = self.next_level.flush(address, current_step)
-                r.deepen(self.flush_miss_time, self.name)
-                r.flush_hit = False
+                r.deepen(self.hit_time, self.name)
         return r
+
 
 
     def flush_all(self, current_step):
