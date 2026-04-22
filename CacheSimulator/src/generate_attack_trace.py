@@ -105,7 +105,7 @@ def write_trace_file(geometry, setup_lines, victim_lines, probe_lines, output_fi
         f.write("\n# === PHASE 2: VICTIM ===\n")
         for line in victim_lines: f.write(line + "\n")
         
-        f.write("\n# === PHASE 3: PROBE ===\n")
+        f.write("\n# === PHASE 3: TEST ===\n")
         for line in probe_lines: f.write(line + "\n")
 
 def main():
