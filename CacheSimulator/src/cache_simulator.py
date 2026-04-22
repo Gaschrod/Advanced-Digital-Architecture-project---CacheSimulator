@@ -25,7 +25,7 @@ def main():
     if arguments['log_file']:
         log_filename = arguments['log_file']
 
-    #Clear the log file if it exists
+    # Clear the log file if it exists
     with open(log_filename, 'w'):
         pass
 
@@ -112,7 +112,7 @@ def print_cache(cache):
         print (table.table)
 
 # Loop through the instructions in the tracefile and use the given memory hierarchy to find AMAT (Average Memory Access Time)
-def simulate(hierarchy, trace, logger, attack_type=None):
+def simulate(hierarchy, trace, logger, attack_type):
     responses = []
     # We only interface directly with L1. Reads and writes will automatically interact with lower levels of the hierarchy
     l1 = hierarchy['cache_1']
@@ -131,7 +131,7 @@ def simulate(hierarchy, trace, logger, attack_type=None):
             raise cache.InvalidOpError
 
 
-        #Call read for this address on our memory hierarchy
+        # Call read for this address on our memory hierarchy
         if op == 'R':
             logger.info(str(current_step) + ':\t[' + actor + '] Reading ' + address)
             r = l1.read(address, current_step)
@@ -167,7 +167,7 @@ def get_llc_name(hierarchy):
     if 'cache_2' in hierarchy: return 'cache_2'
     return 'cache_1'
 
-def analyze_results(hierarchy, responses, logger, attack_type=None):
+def analyze_results(hierarchy, responses, logger, attack_type):
     n_instructions = len(responses)
     total_time = sum(r.time for r in responses)
 
