@@ -186,11 +186,14 @@ def analyze_results(hierarchy, responses, logger, attack_type=None):
     # Prime & Probe report — only if both actors are present
     if attacker_responses and victim_responses:
         if attack_type == 'prime_probe':
+            logger.info('\n=== Prime & Probe Analysis ===')
             analyze_prime_probe(hierarchy['cache_1'], attacker_responses, logger)
         elif attack_type == 'flush_reload':
+            logger.info('\n=== Flush & Reload Analysis ===')
             analyze_flush_reload(hierarchy, responses, logger)
         elif attack_type == 'flush_flush':
-            analyze_flush_flush(hierarchy, responses, logger)
+            logger.info('\n=== Flush & Flush Analysis ===')
+            analyze_flush_flush(responses, logger)
         else:
             logger.info('\nNo attack type specified, skipping attack analysis. Use -a or --attack-type to specify an attack type for analysis.')
 
@@ -272,7 +275,7 @@ def analyze_flush_reload(hierarchy, responses, logger):
         else:
             status = f'SLOW reload (time={r.time} > threshold={threshold}) → victim did not access (fetched from memory)'
 
-        logger.info(f'\tReload @ {r.address}: {status}')
+        logger.info(f'Reload @ {r.address}: {status}')
 
     logger.info(f'\nThreshold used: {threshold} cycles (LLC={llc.hit_time}, mem={mem.hit_time})')
     logger.info(f'Lines likely accessed by victim: {len(accessed)}')
@@ -281,7 +284,6 @@ def analyze_flush_reload(hierarchy, responses, logger):
 
 def analyze_flush_flush(responses, logger):
     # Flush+Flush is only meaningful if the attacker and victim share a cache line, so we look for flushes that hit in the victim's accesses
-    logger.info('\n=== Flush+Flush Analysis ===')
     
     attacker_flushes = [r for r in responses if r.actor == 'ATTACKER'and getattr(r, 'flush_hit', None) is not None]
     seen = set()
