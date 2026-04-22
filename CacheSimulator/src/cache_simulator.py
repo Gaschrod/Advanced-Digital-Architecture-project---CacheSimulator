@@ -9,12 +9,14 @@ def main():
     parser.add_argument('-c','--config-file', help='Configuration file for the memory heirarchy', required=True)
     parser.add_argument('-t', '--trace-file', help='Tracefile containing instructions', required=True)
     parser.add_argument('-p', '--policy', choices=['lru', 'mru', 'nru', 'lfu', 'fifo', 'lifo', 'filo', 'random'], help='Eviction policy to use (lru, mru, nru, lfu, fifo, lifo, filo, random)', type=str.lower, required=False, default='lru')
+    parser.add_argument('-a', '--attack-type', choices=['prime_probe', 'flush_reload', 'flush_flush'], help='Type of attack to analyze (prime_probe or flush_reload)', type=str.lower, required=False)
     parser.add_argument('-l', '--log-file', help='Log file name', required=False)
     parser.add_argument('-b', '--beautify', help='Use colors', required=False, action='store_true')
     parser.add_argument('-d', '--draw-cache', help='Draw cache layouts', required=False, action='store_true')
     arguments = vars(parser.parse_args())
     
     policy = arguments['policy']
+    attack_type = arguments['attack_type']
     
     if arguments['beautify']:
         import colorer
@@ -158,9 +160,15 @@ def simulate(hierarchy, trace, logger):
         else:
             raise cache.InvalidOpError
     logger.info('Simulation complete')
-    analyze_results(hierarchy, responses, logger)
+    analyze_results(hierarchy, responses, logger, attack_type=attack_type)
 
-def analyze_results(hierarchy, responses, logger):
+def get_llc_name(hierarchy):
+    """Trouve dynamiquement le Last Level Cache (LLC) basé sur la config."""
+    if 'cache_3' in hierarchy: return 'cache_3'
+    if 'cache_2' in hierarchy: return 'cache_2'
+    return 'cache_1'
+
+def analyze_results(hierarchy, responses, logger, attack_type=None):
     n_instructions = len(responses)
     total_time = sum(r.time for r in responses)
 
@@ -177,9 +185,17 @@ def analyze_results(hierarchy, responses, logger):
 
     # Prime & Probe report — only if both actors are present
     if attacker_responses and victim_responses:
-        logger.info('\n=== Prime & Probe Analysis ===')
-        analyze_prime_probe(hierarchy['cache_1'], attacker_responses, logger)
-
+        if attack_type == 'prime_probe':
+            logger.info('\n=== Prime & Probe Analysis ===')
+            analyze_prime_probe(hierarchy['cache_1'], attacker_responses, logger)
+        elif attack_type == 'flush_reload':
+            logger.info('\n=== Flush+Reload Analysis ===')
+            analyze_flush_reload(hierarchy, responses, logger)
+        elif attack_type == 'flush_flush':
+            logger.info('\n=== Flush+Flush Analysis ===')
+            analyze_flush_reload(hierarchy, responses, logger)
+        else:
+            logger.info('\nNo attack type specified, skipping attack analysis. Use -a or --attack-type to specify an attack type for analysis.')
 
 def compute_amat(level, responses, logger, results={}):
     #Check if this is main memory
@@ -231,6 +247,45 @@ def analyze_prime_probe(l1, attacker_responses, logger):
             compromised_sets.append(probe_r)
 
     logger.info('\nSets likely accessed by victim: ' + str(len(compromised_sets)))
+
+def analyze_flush_reload(hierarchy, responses, logger):
+    # Flush+Reload is only meaningful if the attacker and victim share a cache line, so we look for flushes that hit in the victim's accesses
+    logger.info('\n=== Flush+Reload Analysis ===')
+    
+    flush_addresses = {r.address for r in responses if r.actor == 'ATTACKER' and getattr(r, 'flush_hit', None) is not None}
+    attacker_reads = [r for r in responses if r.actor == 'ATTACKER' and r.address in flush_addresses and getattr(r, 'flush_hit', None) is not None and r.address in flush_addresses]
+
+    for r in attacker_reads:
+        hit_in_llc = llc_name in r.hit_list
+        hit_in_any_cache = any(c in r.hit_list for c in hierarchy if c != 'mem')
+
+        if hit_in_llc:
+            status = "HIT in LLC -> line shared with victim)"
+        elif hit_in_any_cache:
+            status = "HIT in upper cache"
+        else:
+            status = "MISS, likely no access by victim or the victim accessed but the line was evicted before the attacker's read"
+
+        logger.info('\tFlush address: ' + str(r.address) + ' -> ' + status) # If short time: memory has been accessed and thus data is still in cache
+        # If not: as the line has been evicted, the data is not in cache anymore and thus we have a miss
+
+def analyze_flush_flush(hierarchy, responses, logger):
+    # Flush+Flush is only meaningful if the attacker and victim share a cache line, so we look for flushes that hit in the victim's accesses
+    logger.info('\n=== Flush+Flush Analysis ===')
+    
+    attacker_flushes = [r for r in responses if r.actor == 'ATTACKER' and r.address in flush_addresses and getattr(r, 'flush_hit', None) is not None and r.address in flush_addresses]
+
+    seen = set()
+    probe_flushes = []
+    for r in attacker_flushes:
+        if r.address in seen:
+            probe_flushes.append(r)
+        else:
+            seen.add(r.address)
+    
+    for r in probe_flushes:
+        status = "HIT -> victim accessed the memory line"
+        logger.info('\tFlush address: ' + str(r.address) + ' -> ' + status) # If short time: memory has been accessed and thus data is still in cache
 
 def build_hierarchy(configs, logger, policy):
     #Build the cache hierarchy with the given configuration
