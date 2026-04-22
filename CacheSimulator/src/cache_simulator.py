@@ -186,13 +186,10 @@ def analyze_results(hierarchy, responses, logger, attack_type=None):
     # Prime & Probe report — only if both actors are present
     if attacker_responses and victim_responses:
         if attack_type == 'prime_probe':
-            logger.info('\n=== Prime & Probe Analysis ===')
             analyze_prime_probe(hierarchy['cache_1'], attacker_responses, logger)
         elif attack_type == 'flush_reload':
-            logger.info('\n=== Flush+Reload Analysis ===')
             analyze_flush_reload(hierarchy, responses, logger)
         elif attack_type == 'flush_flush':
-            logger.info('\n=== Flush+Flush Analysis ===')
             analyze_flush_flush(hierarchy, responses, logger)
         else:
             logger.info('\nNo attack type specified, skipping attack analysis. Use -a or --attack-type to specify an attack type for analysis.')
@@ -242,42 +239,47 @@ def analyze_prime_probe(l1, attacker_responses, logger):
         # A miss on probe means the victim evicted the attacker's line
         hit_in_l1 = probe_r.hit_list.get('cache_1', False)
         status = 'HIT  (set untouched)' if hit_in_l1 else 'MISS (victim accessed this set!)'
-        logger.info('\tProbe address: ' + str(probe_r.address) + ' -> ' + status)
+        logger.info('Probe address: ' + str(probe_r.address) + ' -> ' + status)
         if not hit_in_l1:
             compromised_sets.append(probe_r)
 
     logger.info('\nSets likely accessed by victim: ' + str(len(compromised_sets)))
 
 def analyze_flush_reload(hierarchy, responses, logger):
-    # Flush+Reload is only meaningful if the attacker and victim share a cache line, so we look for flushes that hit in the victim's accesses
-    logger.info('\n=== Flush+Reload Analysis ===')
+    llc_name = get_llc_name(hierarchy)
+    llc = hierarchy[llc_name]
+    mem = hierarchy['mem']
 
-    llc_name = get_llc_name(hierarchy)    
-    flush_addresses = {r.address for r in responses if r.actor == 'ATTACKER' and getattr(r, 'flush_hit', None) is not None}
-    attacker_reads = [r for r in responses if r.actor == 'ATTACKER' and r.address in flush_addresses and getattr(r, 'flush_hit', None) is not None and r.address in flush_addresses]
-	
+    # Threshold: anything below memory latency means the line was found in LLC
+    # (shared across cores) — the attacker can't observe the victim's private L1/L2
+    threshold = (llc.hit_time + mem.hit_time) // 2
+
+    flush_addresses = {r.address for r in responses
+                       if r.actor == 'ATTACKER' and getattr(r, 'flush_hit', None) is not None}
+
+    attacker_reads = [r for r in responses
+                      if r.actor == 'ATTACKER'
+                      and r.address in flush_addresses
+                      and getattr(r, 'flush_hit', None) is None]
+
     accessed = []
     for r in attacker_reads:
-        hit_in_llc   = r.hit_list.get(llc_name, False) is True   # ← was checking key existence
-        hit_in_cache = any(r.hit_list.get(c, False) is True
-                           for c in hierarchy if c != 'mem')
-
-        if hit_in_llc:
-            status = f'HIT in LLC ({llc_name}) → victim accessed this line'
+        # In a real cross-core scenario, a victim access leaves the line in the shared LLC.
+        # The reload time reflects LLC latency (fast) vs memory latency (slow).
+        if r.time <= threshold:
+            status = f'FAST reload (time={r.time} ≤ threshold={threshold}) → victim accessed this line (found in LLC)'
             accessed.append(r.address)
-        elif hit_in_cache:
-            status = 'HIT in upper cache → victim accessed this line'
         else:
-            status = 'MISS → victim did not access (or line was evicted before reload)'
+            status = f'SLOW reload (time={r.time} > threshold={threshold}) → victim did not access (fetched from memory)'
 
-        logger.info(f'\tReload @ {r.address}: {r.time} cycles → {status}') # If short time: memory has been accessed and thus data is still in cache
-        # If not: as the line has been evicted, the data is not in cache anymore and thus we have a miss
-    
-    logger.info(f'\nLines likely accessed by victim: {len(accessed)}')
+        logger.info(f'\tReload @ {r.address}: {status}')
+
+    logger.info(f'\nThreshold used: {threshold} cycles (LLC={llc.hit_time}, mem={mem.hit_time})')
+    logger.info(f'Lines likely accessed by victim: {len(accessed)}')
     for addr in accessed:
         logger.info(f'\t{addr}')
 
-def analyze_flush_flush(hierarchy, responses, logger):
+def analyze_flush_flush(responses, logger):
     # Flush+Flush is only meaningful if the attacker and victim share a cache line, so we look for flushes that hit in the victim's accesses
     logger.info('\n=== Flush+Flush Analysis ===')
     
@@ -292,13 +294,13 @@ def analyze_flush_flush(hierarchy, responses, logger):
     
     accessed = []
     for r in probe_flushes:
-        if r.flush_hit:                                           # ← was always printing "HIT"
+        if r.flush_hit:
             status = f'SLOW flush (hit) → victim accessed this line'
             accessed.append(r.address)
         else:
             status = f'FAST flush (miss) → victim did not access'
         
-        logger.info(f'\tProbe flush @ {r.address}: {r.time} cycles → {status}') # If short time: memory has been accessed and thus data is still in cache
+        logger.info(f'Probe flush @ {r.address}: {r.time} cycles → {status}') # If short time: memory has been accessed and thus data is still in cache
     
     logger.info(f'\nLines likely accessed by victim: {len(accessed)}')
     for addr in accessed:
