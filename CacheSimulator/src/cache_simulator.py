@@ -52,7 +52,7 @@ def main():
     trace = [item for item in trace if item.strip() and not item.startswith('#')]
     logger.info('Loaded tracefile ' + arguments['trace_file'])
     logger.info('Begin simulation!')
-    simulate(hierarchy, trace, logger)
+    simulate(hierarchy, trace, logger, attack_type)
     if arguments['draw_cache']:
         for cache in hierarchy:
             if hierarchy[cache].next_level:
@@ -112,7 +112,7 @@ def print_cache(cache):
         print (table.table)
 
 # Loop through the instructions in the tracefile and use the given memory hierarchy to find AMAT (Average Memory Access Time)
-def simulate(hierarchy, trace, logger):
+def simulate(hierarchy, trace, logger, attack_type=None):
     responses = []
     # We only interface directly with L1. Reads and writes will automatically interact with lower levels of the hierarchy
     l1 = hierarchy['cache_1']
@@ -160,7 +160,7 @@ def simulate(hierarchy, trace, logger):
         else:
             raise cache.InvalidOpError
     logger.info('Simulation complete')
-    analyze_results(hierarchy, responses, logger, attack_type=attack_type)
+    analyze_results(hierarchy, responses, logger, attack_type)
 
 def get_llc_name(hierarchy):
     """Trouve dynamiquement le Last Level Cache (LLC) basé sur la config."""
