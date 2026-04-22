@@ -149,8 +149,7 @@ def simulate(hierarchy, trace, logger, attack_type=None):
         elif op == 'F':
             logger.info(str(current_step) + ':\t[' + actor + '] Flushing ' + address)
             r = l1.flush(address, current_step)
-            r.actor = actor
-            r.address = address
+            r.flush_hit = any(hit for level, hit in r.hit_list.items() if level != 'mem')
             logger.warning('\thit_list: ' + pprint.pformat(r.hit_list) + '\ttime: ' + str(r.time) + '\tflush_hit: ' + str(r.flush_hit) + '\n')
             responses.append(r)
         elif op == 'FA': # Doesn't care about the address which is a placeholder anyway
@@ -163,7 +162,7 @@ def simulate(hierarchy, trace, logger, attack_type=None):
     analyze_results(hierarchy, responses, logger, attack_type)
 
 def get_llc_name(hierarchy):
-    """Trouve dynamiquement le Last Level Cache (LLC) basé sur la config."""
+    # Dynamically find the Last Level Cache (LLC) based on the configuration
     if 'cache_3' in hierarchy: return 'cache_3'
     if 'cache_2' in hierarchy: return 'cache_2'
     return 'cache_1'
