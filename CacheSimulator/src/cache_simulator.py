@@ -149,6 +149,8 @@ def simulate(hierarchy, trace, logger, attack_type):
         elif op == 'F':
             logger.info(str(current_step) + ':\t[' + actor + '] Flushing ' + address)
             r = l1.flush(address, current_step)
+            r.actor = actor
+            r.address = address
             r.flush_hit = any(hit for level, hit in r.hit_list.items() if level != 'mem')
             logger.warning('\thit_list: ' + pprint.pformat(r.hit_list) + '\ttime: ' + str(r.time) + '\tflush_hit: ' + str(r.flush_hit) + '\n')
             responses.append(r)
