@@ -2,7 +2,7 @@ import math, block, response, random
 import pprint
 
 class Cache:
-    def __init__(self, name, word_size, block_size, n_blocks, associativity, hit_time, write_time, write_back, logger, next_level=None, policy='LRU'):
+    def __init__(self, name, word_size, block_size, n_blocks, associativity, hit_time, write_time, write_back, logger, next_level=None, policy='LRU', core_id=None, is_shared=False):
         self.name = name
         self.word_size = word_size
         self.block_size = block_size
@@ -18,6 +18,9 @@ class Cache:
         # In reality the time of execution would depend on the specific implementation and hardware architecture
         self.flush_miss_time = self.hit_time
         
+        self.core_id = core_id  # Which core owns this cache (None for shared caches)
+        self.is_shared = is_shared  # Is this a shared cache (L2/L3)?
+
         self.n_sets = int(n_blocks / associativity)
         self.data = {}
         self.next_level = next_level
@@ -262,6 +265,115 @@ class Cache:
             index = '0'
         tag = binary_address[:-(self.block_offset_size+self.index_size)]
         return (block_offset, index, tag)
+
+    # ==================== Coherence Methods for Multi-Core ====================
+    # Implemented with reference to wikipedia MSI protocol and directory based cache coherence pages.
+
+    def get_coherence_state(self, address):
+        """Get coherence state of a block ('M', 'S', or 'I')"""
+        block_offset, index, tag = self.parse_address(address)
+
+        if index not in self.data or tag not in self.data[index]:
+            return 'I'  # Not present = Invalid
+
+        return self.data[index][tag].get_coherence_state()
+
+    def invalidate_block(self, address):
+        """Invalidate a block (coherence callback from bus)"""
+        block_offset, index, tag = self.parse_address(address)
+
+        if index in self.data and tag in self.data[index]:
+            state = self.data[index][tag].get_coherence_state()
+            self.logger.info(f'\t[Core {self.core_id} L1] Invalidating {address} (was in state {state})')
+            # Remove the block
+            del self.data[index][tag]
+
+    def downgrade_to_shared(self, address):
+        """Downgrade block from Modified to Shared (bus intervention)"""
+        block_offset, index, tag = self.parse_address(address)
+
+        if index in self.data and tag in self.data[index]:
+            self.logger.info(f'\t[Core {self.core_id} L1] Downgrading {address} from M to S')
+            self.data[index][tag].set_coherence_state('S')
+            self.data[index][tag].clean()  # No longer dirty
+
+    def upgrade_to_modified(self, address):
+        """Upgrade block from Shared to Modified"""
+        block_offset, index, tag = self.parse_address(address)
+
+        if index in self.data and tag in self.data[index]:
+            self.logger.info(f'\t[Core {self.core_id} L1] Upgrading {address} from S to M')
+            self.data[index][tag].set_coherence_state('M')
+
+    def install_block(self, address, coherence_state, current_step):
+        """Install a new block with given coherence state.
+
+        Returns (evicted_address, evicted_state, evicted_is_dirty, writeback_time)
+        if a block was evicted, otherwise None.
+        """
+        block_offset, index, tag = self.parse_address(address)
+
+        eviction_result = None
+        if len(self.data[index]) >= self.associativity:
+            oldest_tag = self.eviction(index)
+            evicted = self.data[index][oldest_tag]
+            evicted_address = evicted.address
+            evicted_state  = evicted.get_coherence_state()
+            evicted_dirty  = evicted.is_dirty()
+
+            writeback_time = 0
+            if self.write_back and evicted_dirty:
+                self.logger.info(f'\t[Core {self.core_id} L1] Evicting dirty block {evicted_address} (write-back to L2)')
+                wb = self.next_level.write(evicted_address, True, current_step)
+                writeback_time = wb.time
+
+            del self.data[index][oldest_tag]
+            eviction_result = (evicted_address, evicted_state, evicted_dirty, writeback_time)
+
+        # Install new block
+        dirty = (coherence_state == 'M')
+        self.data[index][tag] = block.Block(self.block_size, current_step, dirty, address, coherence_state)
+        self.mark_referenced(index, tag)
+        self.logger.info(f'\t[Core {self.core_id} L1] Installed {address} in state {coherence_state}')
+        return eviction_result
+
+    def supply_data(self, address):
+        """Supply data to another cache (coherence callback for intervention)"""
+        block_offset, index, tag = self.parse_address(address)
+
+        if index in self.data and tag in self.data[index]:
+            self.logger.info(f'\t[Core {self.core_id} L1] Supplying data for {address}')
+            # Return a copy of the block (simulated)
+            return self.data[index][tag]
+        return None
+
+    def local_read(self, address, current_step):
+        """Local read without coherence check (coherence already validated)"""
+        block_offset, index, tag = self.parse_address(address)
+
+        if index in self.data and tag in self.data[index]:
+            self.data[index][tag].read(current_step)
+            self.mark_referenced(index, tag)
+            return response.Response({self.name: True}, self.hit_time)
+        else:
+            # Should not happen if coherence protocol is correct
+            self.logger.error(f'\t[Core {self.core_id} L1] local_read() called but block {address} not present!')
+            return response.Response({self.name: False}, 0)
+
+    def local_write(self, address, current_step):
+        """Local write without coherence check (coherence already validated)"""
+        block_offset, index, tag = self.parse_address(address)
+
+        if index in self.data and tag in self.data[index]:
+            self.data[index][tag].write(current_step)
+            self.mark_referenced(index, tag)
+            # Ensure Modified state
+            self.data[index][tag].set_coherence_state('M')
+            return response.Response({self.name: True}, self.write_time)
+        else:
+            # Should not happen if coherence protocol is correct
+            self.logger.error(f'\t[Core {self.core_id} L1] local_write() called but block {address} not present!')
+            return response.Response({self.name: False}, 0)
 
 
 class InvalidOpError(Exception):

@@ -1,0 +1,26 @@
+# T11 — Producer-consumer pattern: read-modify-write hand-off
+# Core 0 reads, writes (R-M-W). Core 1 reads result, writes its own update.
+# Tests the full round-trip: S→M→S→M across cores.
+#
+# Expected step times:
+#   step 0: Core 0 R 00000020, miss I→S  bus(5) + L2-miss(1016) = 1021
+#   step 1: Core 0 W 00000020, upgrade   bus(5)                  =    5
+#   step 2: Core 0 W 00000020, hit M     local                   =    1
+#   step 3: Core 1 R 00000020, miss I→S  bus(5) + c2c(10)        =   15
+#              (Core 0 M → downgrade S, both share)
+#   step 4: Core 1 W 00000020, upgrade   bus(5)                  =    5
+#              (invalidates Core 0 S→I; Core 1 S→M)
+#   step 5: Core 1 W 00000020, hit M     local                   =    1
+#   step 6: Core 0 R 00000020, miss I→S  bus(5) + c2c(10)        =   15
+#              (Core 1 M → downgrade S, both share)
+#   step 7: Core 0 R 00000020, hit S     local                   =    1
+# Total = 1064
+
+0 00000020 R
+0 00000020 W
+0 00000020 W
+1 00000020 R
+1 00000020 W
+1 00000020 W
+0 00000020 R
+0 00000020 R

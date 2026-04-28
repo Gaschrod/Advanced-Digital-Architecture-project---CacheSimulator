@@ -2,6 +2,7 @@
 
 import yaml, cache, argparse, logging, pprint
 from terminaltables.other_tables import UnixTable
+import core, bus, directory
 
 def main():
     #Set up our arguments
@@ -13,6 +14,8 @@ def main():
     parser.add_argument('-l', '--log-file', help='Log file name', required=False)
     parser.add_argument('-b', '--beautify', help='Use colors', required=False, action='store_true')
     parser.add_argument('-d', '--draw-cache', help='Draw cache layouts', required=False, action='store_true')
+    parser.add_argument('-m', '--multi-core', help='Enable multi-core simulation with MSI coherence', required=False, action='store_true')
+    parser.add_argument('-n', '--num-cores', help='Number of cores for multi-core simulation (default: 2)', type=int, required=False, default=2)
     arguments = vars(parser.parse_args())
     
     policy = arguments['policy']
@@ -43,8 +46,15 @@ def main():
     logger.info('Loading config...')
     config_file = open(arguments['config_file'])
     configs = yaml.safe_load(config_file)
-    hierarchy = build_hierarchy(configs, logger, policy)
-    logger.info('Memory hierarchy built.')
+
+    # Multi-core or single-core mode
+    if arguments['multi_core']:
+        logger.info(f'Building multi-core hierarchy with {arguments["num_cores"]} cores...')
+        hierarchy = build_multicore_hierarchy(configs, logger, policy, arguments['num_cores'])
+        logger.info('Multi-core memory hierarchy built.')
+    else:
+        hierarchy = build_hierarchy(configs, logger, policy)
+        logger.info('Memory hierarchy built.')
 
     logger.info('Loading tracefile...')
     trace_file = open(arguments['trace_file'])
@@ -52,11 +62,25 @@ def main():
     trace = [item for item in trace if item.strip() and not item.startswith('#')]
     logger.info('Loaded tracefile ' + arguments['trace_file'])
     logger.info('Begin simulation!')
-    simulate(hierarchy, trace, logger, attack_type)
+
+    # Run appropriate simulation
+    # WARNING: check for attack_type in multicore
+    if arguments['multi_core']:
+        simulate_multicore(hierarchy, trace, logger)
+    else:
+        simulate(hierarchy, trace, logger, attack_type)
+
     if arguments['draw_cache']:
-        for cache in hierarchy:
-            if hierarchy[cache].next_level:
-                print_cache(hierarchy[cache])
+        if arguments['multi_core']:
+            # Draw L1 caches for each core
+            for i in range(arguments['num_cores']):
+                cache_name = f'cache_1_core_{i}'
+                if cache_name in hierarchy and hierarchy[cache_name].next_level:
+                    print_cache(hierarchy[cache_name])
+        else:
+            for cache_item in hierarchy:
+                if hierarchy[cache_item].next_level:
+                    print_cache(hierarchy[cache_item])
 
 #Print the contents of a cache as a table
 #If the table is too long, it will print the first few sets,
@@ -330,7 +354,7 @@ def build_hierarchy(configs, logger, policy):
     hierarchy['cache_1'] = cache_1
     return hierarchy
 
-def build_cache(configs, name, next_level_cache, logger, policy):
+def build_cache(configs, name, next_level_cache, logger, policy, core_id=None, is_shared=False):
 
     return cache.Cache(name,
                 configs['architecture']['word_size'],
@@ -342,7 +366,175 @@ def build_cache(configs, name, next_level_cache, logger, policy):
                 configs['architecture']['write_back'],
                 logger,
                 next_level_cache,
-                policy)
+                policy,
+                core_id,
+                is_shared)
+
+
+def build_multicore_hierarchy(configs, logger, policy, num_cores=2):
+    """Build multi-core hierarchy with private L1 caches and shared L2
+
+    Args:
+        configs: Configuration dictionary from YAML
+        logger: Logger instance
+        policy: Eviction policy string
+        num_cores: Number of CPU cores (default: 2)
+
+    Returns:
+        hierarchy dict containing cores, caches, directory, and bus
+    """
+    hierarchy = {}
+
+    # Build memory (required)
+    main_memory = build_cache(configs, 'mem', None, logger, policy)
+    hierarchy['mem'] = main_memory
+    prev_level = main_memory
+
+    # Build L2 (shared cache - required for multi-core)
+    if 'cache_2' not in configs.keys():
+        raise ValueError("Multi-core mode requires cache_2 (shared L2) in config file")
+
+    cache_2 = build_cache(configs, 'cache_2', prev_level, logger, policy, core_id=None, is_shared=True)
+    hierarchy['cache_2'] = cache_2
+    prev_level = cache_2
+
+    # Create directory controller
+    dir_controller = directory.Directory(logger)
+    hierarchy['directory'] = dir_controller
+
+    # Create bus
+    system_bus = bus.Bus(dir_controller, prev_level, logger)
+    hierarchy['bus'] = system_bus
+
+    # Build cores with private L1 caches
+    cores = []
+    for i in range(num_cores):
+        # Create private L1 cache for this core
+        l1_name = f'cache_1_core_{i}'
+        l1_cache = build_cache(configs, 'cache_1', prev_level, logger, policy, core_id=i, is_shared=False)
+
+        # Create core
+        cpu_core = core.Core(i, l1_cache, system_bus, logger)
+        cores.append(cpu_core)
+
+        hierarchy[f'core_{i}'] = cpu_core
+        hierarchy[l1_name] = l1_cache
+
+    hierarchy['cores'] = cores
+    hierarchy['num_cores'] = num_cores
+
+    return hierarchy
+
+
+def simulate_multicore(hierarchy, trace, logger):
+    """Simulate multi-core execution with MSI coherence
+
+    Trace format: <core_id> <address> <operation> [ATTACKER|VICTIM]
+    Example: 0 00000000 R VICTIM
+
+    Args:
+        hierarchy: Multi-core hierarchy dict
+        trace: List of trace instructions
+        logger: Logger instance
+    """
+    responses = []
+    cores = hierarchy['cores']
+    num_cores = hierarchy['num_cores']
+
+    for current_step in range(len(trace)):
+        instruction = trace[current_step]
+        parts = instruction.split()
+
+        # Parse multi-core trace format: <core_id> <address> <operation> [ATTACKER|VICTIM]
+        if len(parts) == 4:
+            core_id_str, address, op, actor = parts
+            if actor not in ['ATTACKER', 'VICTIM']:
+                raise cache.InvalidOpError("Invalid actor (must be ATTACKER or VICTIM)")
+        elif len(parts) == 3:
+            core_id_str, address, op = parts
+            actor = 'UNKNOWN'
+        else:
+            raise cache.InvalidOpError("Multi-core trace format: <core_id> <address> <operation> [ATTACKER|VICTIM]")
+
+        # Parse core ID
+        try:
+            core_id = int(core_id_str)
+        except ValueError:
+            raise cache.InvalidOpError(f"Invalid core_id: {core_id_str} (must be integer)")
+
+        if core_id >= num_cores or core_id < 0:
+            raise ValueError(f"Invalid core_id {core_id}, only {num_cores} cores available (0-{num_cores-1})")
+
+        target_core = cores[core_id]
+
+        # Execute operation on appropriate core
+        if op == 'R':
+            logger.info(f"{current_step}:\t[Core {core_id}] [{actor}] Reading {address}")
+            r = target_core.read(address, current_step)
+            r.actor = actor
+            r.address = address
+            logger.warning(f'\thit_list: {pprint.pformat(r.hit_list)} time: {r.time}\n')
+            responses.append(r)
+
+        elif op == 'W':
+            logger.info(f"{current_step}:\t[Core {core_id}] [{actor}] Writing {address}")
+            r = target_core.write(address, current_step)
+            r.actor = actor
+            r.address = address
+            logger.warning(f'\thit_list: {pprint.pformat(r.hit_list)} time: {r.time}\n')
+            responses.append(r)
+
+        elif op == 'F':
+            logger.info(f"{current_step}:\t[Core {core_id}] [{actor}] Flushing {address}")
+            r = target_core.flush(address, current_step)
+            logger.info('\n')
+
+        elif op == 'FA':
+            logger.info(f"{current_step}:\t[Core {core_id}] [{actor}] Flushing all")
+            r = target_core.flush_all(current_step)
+            logger.info('\n')
+
+        else:
+            raise cache.InvalidOpError(f"Invalid operation: {op}")
+
+    logger.info('Simulation complete')
+    analyze_multicore_results(hierarchy, responses, logger)
+
+
+def analyze_multicore_results(hierarchy, responses, logger):
+    """Analyze multi-core simulation results
+
+    Args:
+        hierarchy: Multi-core hierarchy dict
+        responses: List of Response objects
+        logger: Logger instance
+    """
+    n_instructions = len(responses)
+    total_time = sum(r.time for r in responses)
+
+    logger.info(f'\nNumber of instructions: {n_instructions}')
+    logger.info(f'\nTotal cycles taken: {total_time}\n')
+
+    # Per-core statistics
+    num_cores = hierarchy['num_cores']
+    for i in range(num_cores):
+        cache_name = f'core_{i}_L1'
+        core_responses = [r for r in responses if cache_name in r.hit_list]
+
+        if core_responses:
+            n_access = len(core_responses)
+            n_hits = sum(1 for r in core_responses if r.hit_list.get(cache_name, False))
+            n_miss = n_access - n_hits
+            hit_rate = (n_hits / n_access * 100) if n_access > 0 else 0
+
+            logger.info(f'Core {i} L1:')
+            logger.info(f'\tNumber of accesses: {n_access}')
+            logger.info(f'\tNumber of hits: {n_hits}')
+            logger.info(f'\tNumber of misses: {n_miss}')
+            logger.info(f'\tHit rate: {hit_rate:.2f}%\n')
+
+    # Overall statistics (could add AMAT calculation for shared L2 here)
+    logger.info('Note: Multi-core AMAT calculation not yet implemented')
 
 
 if __name__ == '__main__':
