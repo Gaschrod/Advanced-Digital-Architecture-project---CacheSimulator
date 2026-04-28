@@ -1,0 +1,151 @@
+# Comprehensive Multi-Core MSI Coherence Test
+# Tests all major MSI state transitions with detailed scenarios
+# Format: <core_id> <address> <operation> [ATTACKER|VICTIM]
+
+# ========================================
+# Test 1: Basic Read Sharing (I → S)
+# ========================================
+# Both cores read the same address and share it
+0 00000000 R
+1 00000000 R
+
+# Expected:
+# - Core 0: I → S (fetch from memory)
+# - Core 1: I → S (fetch from memory, both share)
+# - Directory: I → S with sharers {0, 1}
+
+# ========================================
+# Test 2: Shared Read Hit
+# ========================================
+# Verify hits work in Shared state
+0 00000000 R
+1 00000000 R
+
+# Expected:
+# - Core 0: hit in S state (no bus transaction)
+# - Core 1: hit in S state (no bus transaction)
+
+# ========================================
+# Test 3: Write Upgrade (S → M)
+# ========================================
+# Core 0 writes to shared block, must invalidate Core 1
+0 00000000 W
+
+# Expected:
+# - Core 0: S → M (upgrade request)
+# - Core 1: S → I (invalidated by bus)
+# - Directory: S → M with owner=0, sharers={}
+
+# ========================================
+# Test 4: Modified Write Hit
+# ========================================
+# Verify writes work in Modified state
+0 00000000 W
+
+# Expected:
+# - Core 0: hit in M state (no bus transaction)
+
+# ========================================
+# Test 5: Read to Modified Block (M → S intervention)
+# ========================================
+# Core 1 reads block that Core 0 has in Modified state
+1 00000000 R
+
+# Expected:
+# - Core 0: M → S (supplies data, downgrades)
+# - Core 1: I → S (receives data from Core 0)
+# - Directory: M → S with sharers {0, 1}
+# - Data write-back to memory occurs
+
+# ========================================
+# Test 6: Write to Modified Block (M → I intervention)
+# ========================================
+# Core 1 writes to block that Core 0 has in Modified state
+0 00000010 W
+1 00000010 W
+
+# Expected for first write:
+# - Core 0: I → M
+
+# Expected for second write:
+# - Core 0: M → I (supplies data, invalidates)
+# - Core 1: I → M (receives data, becomes owner)
+# - Directory: M → M with owner changed from 0 to 1
+
+# ========================================
+# Test 7: Independent Accesses (No Coherence)
+# ========================================
+# Different cores accessing different addresses
+0 00000020 R
+1 00000030 R
+0 00000040 W
+1 00000050 W
+
+# Expected:
+# - All are misses but independent (no coherence traffic between cores)
+# - Each core has exclusive access to its own addresses
+
+# ========================================
+# Test 8: Ping-Pong Effect
+# ========================================
+# Cores repeatedly writing to same address (worst case for coherence)
+0 00000060 W
+1 00000060 W
+0 00000060 W
+1 00000060 W
+
+# Expected:
+# - Core 0: I → M
+# - Core 1: I → M (invalidates Core 0: M → I)
+# - Core 0: I → M (invalidates Core 1: M → I)
+# - Core 1: I → M (invalidates Core 0: M → I)
+# - High coherence overhead due to repeated invalidations
+
+# ========================================
+# Test 9: Multiple Sharers Then Write
+# ========================================
+# Three reads creating multiple sharers, then one writes
+0 00000070 R
+1 00000070 R
+0 00000070 R
+1 00000070 W
+
+# Expected:
+# - Core 0: I → S
+# - Core 1: I → S (both share)
+# - Core 0: S hit
+# - Core 1: S → M (invalidates Core 0: S → I)
+
+# ========================================
+# Test 10: Sequential Read-Write Pattern
+# ========================================
+# Common access pattern: read then modify
+0 00000080 R
+0 00000080 W
+1 00000080 R
+1 00000080 W
+
+# Expected:
+# - Core 0: I → S (read miss)
+# - Core 0: S → M (upgrade on write)
+# - Core 1: I → S (Core 0 intervenes: M → S)
+# - Core 1: S → M (invalidates Core 0: S → I)
+
+# ========================================
+# Test 11: Eviction with Modified Data
+# ========================================
+# Fill cache to trigger eviction of modified block
+0 00000090 W
+0 00000091 W
+0 00000092 W
+0 00000093 W
+0 00000094 W
+0 00000095 W
+0 00000096 W
+0 00000097 W
+0 00000098 W
+
+# Expected:
+# - Cache fills with modified blocks
+# - Evictions cause write-backs to L2/memory
+# - Directory updated on evictions

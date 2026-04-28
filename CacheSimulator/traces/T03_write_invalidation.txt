@@ -1,0 +1,19 @@
+# T03 — Write invalidation: S→M upgrade forces remote invalidation
+#
+# Expected step times:
+#   step 0: Core 0 R,  miss I→S           bus(5) + L2-miss(1016) = 1021
+#   step 1: Core 1 R,  miss I→S           bus(5) + L2-hit(16)    =   21
+#   step 2: Core 0 W,  upgrade S→M        bus(5)                  =    5
+#              (invalidates Core 1 → I)
+#   step 3: Core 1 R,  miss I→S           bus(5) + c2c(10)        =   15
+#              (Core 0 has M, supplies data, both downgrade to S)
+#   step 4: Core 0 R,  hit  S             local                   =    1
+#   step 5: Core 1 R,  hit  S             local                   =    1
+# Total = 1064
+
+0 00000000 R
+1 00000000 R
+0 00000000 W
+1 00000000 R
+0 00000000 R
+1 00000000 R
