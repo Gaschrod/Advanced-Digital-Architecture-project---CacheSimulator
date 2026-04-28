@@ -13,6 +13,11 @@ class Cache:
         self.write_back = write_back
         self.logger = logger
         self.policy = policy
+        self.flush_hit_time  = self.hit_time + self.write_time # This is an oversimplification but for the purpose of academic learning, we assume that when there's data to write back, 
+        # we pay both the hit time to check tags and the write time to flush dirty block
+        # In reality the time of execution would depend on the specific implementation and hardware architecture
+        self.flush_miss_time = self.hit_time
+        
         self.core_id = core_id  # Which core owns this cache (None for shared caches)
         self.is_shared = is_shared  # Is this a shared cache (L2/L3)?
 
@@ -210,20 +215,18 @@ class Cache:
             in_cache = list(self.data[index].keys())
             if tag in in_cache:
                 if self.data[index][tag].is_dirty():
-                    # Dirty: pay write cost and propagate all the way to memory
                     r = self.next_level.flush(address, current_step)
                     r.deepen(self.write_time, self.name)
                 else:
-                    # Clean: still propagate to invalidate lower levels
-                    # but no write cost at this level
                     r = self.next_level.flush(address, current_step)
                     r.deepen(0, self.name)
-                del self.data[index][tag]  # always invalidate
+                r.hit_list[self.name] = True # If data was present in this cache, we consider it a hit for the purpose of timing analysis
+                del self.data[index][tag]
             else:
-                # Not found here, keep propagating down
                 r = self.next_level.flush(address, current_step)
                 r.deepen(self.hit_time, self.name)
         return r
+
 
 
     def flush_all(self, current_step):
@@ -233,12 +236,12 @@ class Cache:
         else:
             r = response.Response({self.name:True}, 0)
             for index in self.data.keys():
-                for tag in self.data[index].keys():
+                for tag in list(self.data[index].keys()):
                     address = self.data[index][tag].address
                     if self.data[index][tag].is_dirty():
                         self.logger.info('\tFlushing block ' + address + ' to memory')
                         temp = self.next_level.flush(address, current_step)
-                        temp.deepen(self.write_time, self.name)
+                        temp.deepen(self.flush_hit_time, self.name)
                         r.time += temp.time
             # Reinitialize all sets
             self.data = {}

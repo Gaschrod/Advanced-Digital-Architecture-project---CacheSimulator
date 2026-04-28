@@ -10,6 +10,7 @@ def main():
     parser.add_argument('-c','--config-file', help='Configuration file for the memory heirarchy', required=True)
     parser.add_argument('-t', '--trace-file', help='Tracefile containing instructions', required=True)
     parser.add_argument('-p', '--policy', choices=['lru', 'mru', 'nru', 'lfu', 'fifo', 'lifo', 'filo', 'random'], help='Eviction policy to use (lru, mru, nru, lfu, fifo, lifo, filo, random)', type=str.lower, required=False, default='lru')
+    parser.add_argument('-a', '--attack-type', choices=['prime_probe', 'flush_reload', 'flush_flush'], help='Type of attack to analyze (prime_probe or flush_reload)', type=str.lower, required=False)
     parser.add_argument('-l', '--log-file', help='Log file name', required=False)
     parser.add_argument('-b', '--beautify', help='Use colors', required=False, action='store_true')
     parser.add_argument('-d', '--draw-cache', help='Draw cache layouts', required=False, action='store_true')
@@ -18,6 +19,7 @@ def main():
     arguments = vars(parser.parse_args())
     
     policy = arguments['policy']
+    attack_type = arguments['attack_type']
     
     if arguments['beautify']:
         import colorer
@@ -26,7 +28,7 @@ def main():
     if arguments['log_file']:
         log_filename = arguments['log_file']
 
-    #Clear the log file if it exists
+    # Clear the log file if it exists
     with open(log_filename, 'w'):
         pass
 
@@ -62,10 +64,11 @@ def main():
     logger.info('Begin simulation!')
 
     # Run appropriate simulation
+    # WARNING: check for attack_type in multicore
     if arguments['multi_core']:
         simulate_multicore(hierarchy, trace, logger)
     else:
-        simulate(hierarchy, trace, logger)
+        simulate(hierarchy, trace, logger, attack_type)
 
     if arguments['draw_cache']:
         if arguments['multi_core']:
@@ -133,10 +136,9 @@ def print_cache(cache):
         print (table.table)
 
 # Loop through the instructions in the tracefile and use the given memory hierarchy to find AMAT (Average Memory Access Time)
-def simulate(hierarchy, trace, logger):
+def simulate(hierarchy, trace, logger, attack_type):
     responses = []
-    #We only interface directly with L1. Reads and writes will automatically
-    #interact with lower levels of the hierarchy
+    # We only interface directly with L1. Reads and writes will automatically interact with lower levels of the hierarchy
     l1 = hierarchy['cache_1']
     for current_step in range(len(trace)):
         instruction = trace[current_step]
@@ -153,7 +155,7 @@ def simulate(hierarchy, trace, logger):
             raise cache.InvalidOpError
 
 
-        #Call read for this address on our memory hierarchy
+        # Call read for this address on our memory hierarchy
         if op == 'R':
             logger.info(str(current_step) + ':\t[' + actor + '] Reading ' + address)
             r = l1.read(address, current_step)
@@ -171,7 +173,11 @@ def simulate(hierarchy, trace, logger):
         elif op == 'F':
             logger.info(str(current_step) + ':\t[' + actor + '] Flushing ' + address)
             r = l1.flush(address, current_step)
-            logger.info('\n')
+            r.actor = actor
+            r.address = address
+            r.flush_hit = any(hit for level, hit in r.hit_list.items() if level != 'mem')
+            logger.warning('\thit_list: ' + pprint.pformat(r.hit_list) + '\ttime: ' + str(r.time) + '\tflush_hit: ' + str(r.flush_hit) + '\n')
+            responses.append(r)
         elif op == 'FA': # Doesn't care about the address which is a placeholder anyway
             logger.info(str(current_step) + ':\t[' + actor + '] Flushing all')
             r = l1.flush_all(current_step)
@@ -179,9 +185,15 @@ def simulate(hierarchy, trace, logger):
         else:
             raise cache.InvalidOpError
     logger.info('Simulation complete')
-    analyze_results(hierarchy, responses, logger)
+    analyze_results(hierarchy, responses, logger, attack_type)
 
-def analyze_results(hierarchy, responses, logger):
+def get_llc_name(hierarchy):
+    # Dynamically find the Last Level Cache (LLC) based on the configuration
+    if 'cache_3' in hierarchy: return 'cache_3'
+    if 'cache_2' in hierarchy: return 'cache_2'
+    return 'cache_1'
+
+def analyze_results(hierarchy, responses, logger, attack_type):
     n_instructions = len(responses)
     total_time = sum(r.time for r in responses)
 
@@ -198,9 +210,17 @@ def analyze_results(hierarchy, responses, logger):
 
     # Prime & Probe report — only if both actors are present
     if attacker_responses and victim_responses:
-        logger.info('\n=== Prime & Probe Analysis ===')
-        analyze_prime_probe(hierarchy['cache_1'], attacker_responses, logger)
-
+        if attack_type == 'prime_probe':
+            logger.info('\n=== Prime & Probe Analysis ===')
+            analyze_prime_probe(hierarchy['cache_1'], attacker_responses, logger)
+        elif attack_type == 'flush_reload':
+            logger.info('\n=== Flush & Reload Analysis ===')
+            analyze_flush_reload(hierarchy, responses, logger)
+        elif attack_type == 'flush_flush':
+            logger.info('\n=== Flush & Flush Analysis ===')
+            analyze_flush_flush(responses, logger)
+        else:
+            logger.info('\nNo attack type specified, skipping attack analysis. Use -a or --attack-type to specify an attack type for analysis.')
 
 def compute_amat(level, responses, logger, results={}):
     #Check if this is main memory
@@ -247,11 +267,72 @@ def analyze_prime_probe(l1, attacker_responses, logger):
         # A miss on probe means the victim evicted the attacker's line
         hit_in_l1 = probe_r.hit_list.get('cache_1', False)
         status = 'HIT  (set untouched)' if hit_in_l1 else 'MISS (victim accessed this set!)'
-        logger.info('\tProbe address: ' + str(probe_r.address) + ' -> ' + status)
+        logger.info('Probe address: ' + str(probe_r.address) + ' -> ' + status)
         if not hit_in_l1:
             compromised_sets.append(probe_r)
 
     logger.info('\nSets likely accessed by victim: ' + str(len(compromised_sets)))
+
+def analyze_flush_reload(hierarchy, responses, logger):
+    llc_name = get_llc_name(hierarchy)
+    llc = hierarchy[llc_name]
+    mem = hierarchy['mem']
+
+    # Threshold: anything below memory latency means the line was found in LLC
+    # (shared across cores) — the attacker can't observe the victim's private L1/L2
+    threshold = (llc.hit_time + mem.hit_time) // 2
+
+    flush_addresses = {r.address for r in responses
+                       if r.actor == 'ATTACKER' and getattr(r, 'flush_hit', None) is not None}
+
+    attacker_reads = [r for r in responses
+                      if r.actor == 'ATTACKER'
+                      and r.address in flush_addresses
+                      and getattr(r, 'flush_hit', None) is None]
+
+    accessed = []
+    for r in attacker_reads:
+        # In a real cross-core scenario, a victim access leaves the line in the shared LLC.
+        # The reload time reflects LLC latency (fast) vs memory latency (slow).
+        if r.time <= threshold:
+            status = f'FAST reload (time={r.time} ≤ threshold={threshold}) → victim accessed this line (found in LLC)'
+            accessed.append(r.address)
+        else:
+            status = f'SLOW reload (time={r.time} > threshold={threshold}) → victim did not access (fetched from memory)'
+
+        logger.info(f'Reload @ {r.address}: {status}')
+
+    logger.info(f'\nThreshold used: {threshold} cycles (LLC={llc.hit_time}, mem={mem.hit_time})')
+    logger.info(f'Lines likely accessed by victim: {len(accessed)}')
+    for addr in accessed:
+        logger.info(f'\t{addr}')
+
+def analyze_flush_flush(responses, logger):
+    # Flush+Flush is only meaningful if the attacker and victim share a cache line, so we look for flushes that hit in the victim's accesses
+    
+    attacker_flushes = [r for r in responses if r.actor == 'ATTACKER'and getattr(r, 'flush_hit', None) is not None]
+    seen = set()
+    probe_flushes = []
+    for r in attacker_flushes:
+        if r.address in seen:
+            probe_flushes.append(r)
+        else:
+            seen.add(r.address)
+    
+    accessed = []
+    for r in probe_flushes:
+        if r.flush_hit:
+            status = f'SLOW flush (hit) → victim accessed this line'
+            accessed.append(r.address)
+        else:
+            status = f'FAST flush (miss) → victim did not access'
+        
+        logger.info(f'Probe flush @ {r.address}: {r.time} cycles → {status}') # If short time: memory has been accessed and thus data is still in cache
+    
+    logger.info(f'\nLines likely accessed by victim: {len(accessed)}')
+    for addr in accessed:
+        logger.info(f'\t{addr}')
+
 
 def build_hierarchy(configs, logger, policy):
     #Build the cache hierarchy with the given configuration
