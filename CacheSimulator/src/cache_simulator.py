@@ -491,7 +491,7 @@ def simulate_multicore(hierarchy, trace, logger, attack_type=None):
             r.actor = actor
             r.address = address
             r.flush_hit = any(hit for level, hit in r.hit_list.items() if level != 'mem')
-            logger.warning(f'\thit_list: {pprint.pformat(r.hit_list)} time: {r.time}\tflush_hit: {r.flush_hit}\n')
+            logger.warning(f'\thit_list: {pprint.pformat(r.hit_list)}\ttime: {r.time}\tflush_hit: {r.flush_hit}\n')
             responses.append(r)
 
         elif op == 'FA':
