@@ -7,8 +7,12 @@ Usage:
 
 Arguments:
     -c / --config-file   : YAML config file (required)
-    -o / --output-file   : Output trace file (default: prime_probe_trace.txt)
+    -a / --attack-type   : Attack type: prime_probe, flush_reload, or flush_flush (required)
+    -o / --output-file   : Output trace file (default: attack_trace.txt)
     -s / --target-set    : Target a specific set index only (default: all sets)
+    -m / --multi-core    : Generate multi-core trace with core_id prefix (optional)
+    --attacker-core      : Core ID for attacker lines (default: 0, requires -m)
+    --victim-core        : Core ID for victim placeholder lines (default: 1, requires -m)
 
 Output format:
     A ready-to-use trace template with:
@@ -96,7 +100,7 @@ def generate_trace(geometry, target_set, attack_type):
         
     return setup_lines, victim_lines, probe_lines
 
-def write_trace_file(geometry, setup_lines, victim_lines, probe_lines,
+def write_trace_file(setup_lines, victim_lines, probe_lines,
                      output_file, attack_type,
                      attacker_prefix='', victim_prefix=''):
     def prefix_line(line, pfx):
@@ -112,8 +116,13 @@ def write_trace_file(geometry, setup_lines, victim_lines, probe_lines,
 
         f.write("\n# === PHASE 2: VICTIM ===\n")
         for line in victim_lines:
-            if line.startswith('# ') and len(line) > 2 and not line.startswith('# ---') and not line.startswith('# Replace'):
-                f.write('# ' + victim_prefix + line[2:] + "\n")
+            if line.startswith('# '):
+                content = line[2:]
+                parts = content.split()
+                if len(parts) == 3 and parts[2] == 'VICTIM':
+                    f.write('# ' + victim_prefix + content + "\n")
+                else:
+                    f.write(line + "\n")
             else:
                 f.write(line + "\n")
 
@@ -135,16 +144,19 @@ def main():
                         help='Core ID for victim placeholder lines (default: 1)')
     args = parser.parse_args()
 
+    if not args.multi_core and (args.attacker_core != 0 or args.victim_core != 1):
+        parser.error("--attacker-core and --victim-core require --multi-core (-m)")
+
     with open(args.config_file) as f:
         configs = yaml.safe_load(f)
 
     geometry = compute_cache_geometry(configs)
     setup_lines, victim_lines, probe_lines = generate_trace(geometry, args.target_set, args.attack_type)
 
-    attacker_prefix = str(args.attacker_core) + ' ' if args.multi_core else ''
-    victim_prefix   = str(args.victim_core)   + ' ' if args.multi_core else ''
+    attacker_prefix = f"{args.attacker_core} " if args.multi_core else ''
+    victim_prefix   = f"{args.victim_core} "   if args.multi_core else ''
 
-    write_trace_file(geometry, setup_lines, victim_lines, probe_lines,
+    write_trace_file(setup_lines, victim_lines, probe_lines,
                      args.output_file, args.attack_type,
                      attacker_prefix, victim_prefix)
     print(f"Trace template ({args.attack_type}) written to: {args.output_file}")
