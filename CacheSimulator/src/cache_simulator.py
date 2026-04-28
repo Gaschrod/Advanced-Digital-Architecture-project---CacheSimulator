@@ -66,7 +66,7 @@ def main():
     # Run appropriate simulation
     # WARNING: check for attack_type in multicore
     if arguments['multi_core']:
-        simulate_multicore(hierarchy, trace, logger)
+        simulate_multicore(hierarchy, trace, logger, attack_type)
     else:
         simulate(hierarchy, trace, logger, attack_type)
 
@@ -426,7 +426,7 @@ def build_multicore_hierarchy(configs, logger, policy, num_cores=2):
     return hierarchy
 
 
-def simulate_multicore(hierarchy, trace, logger):
+def simulate_multicore(hierarchy, trace, logger, attack_type=None):
     """Simulate multi-core execution with MSI coherence
 
     Trace format: <core_id> <address> <operation> [ATTACKER|VICTIM]
@@ -436,6 +436,7 @@ def simulate_multicore(hierarchy, trace, logger):
         hierarchy: Multi-core hierarchy dict
         trace: List of trace instructions
         logger: Logger instance
+        attack_type: Type of attack to analyze (optional)
     """
     responses = []
     cores = hierarchy['cores']
@@ -487,7 +488,11 @@ def simulate_multicore(hierarchy, trace, logger):
         elif op == 'F':
             logger.info(f"{current_step}:\t[Core {core_id}] [{actor}] Flushing {address}")
             r = target_core.flush(address, current_step)
-            logger.info('\n')
+            r.actor = actor
+            r.address = address
+            r.flush_hit = any(hit for level, hit in r.hit_list.items() if level != 'mem')
+            logger.warning(f'\thit_list: {pprint.pformat(r.hit_list)} time: {r.time}\tflush_hit: {r.flush_hit}\n')
+            responses.append(r)
 
         elif op == 'FA':
             logger.info(f"{current_step}:\t[Core {core_id}] [{actor}] Flushing all")
@@ -498,16 +503,17 @@ def simulate_multicore(hierarchy, trace, logger):
             raise cache.InvalidOpError(f"Invalid operation: {op}")
 
     logger.info('Simulation complete')
-    analyze_multicore_results(hierarchy, responses, logger)
+    analyze_multicore_results(hierarchy, responses, logger, attack_type)
 
 
-def analyze_multicore_results(hierarchy, responses, logger):
+def analyze_multicore_results(hierarchy, responses, logger, attack_type=None):
     """Analyze multi-core simulation results
 
     Args:
         hierarchy: Multi-core hierarchy dict
         responses: List of Response objects
         logger: Logger instance
+        attack_type: Type of attack to analyze (optional)
     """
     n_instructions = len(responses)
     total_time = sum(r.time for r in responses)
