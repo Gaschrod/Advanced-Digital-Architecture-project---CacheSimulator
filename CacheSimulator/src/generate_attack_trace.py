@@ -96,17 +96,30 @@ def generate_trace(geometry, target_set, attack_type):
         
     return setup_lines, victim_lines, probe_lines
 
-def write_trace_file(geometry, setup_lines, victim_lines, probe_lines, output_file, attack_type):
+def write_trace_file(geometry, setup_lines, victim_lines, probe_lines,
+                     output_file, attack_type,
+                     attacker_prefix='', victim_prefix=''):
+    def prefix_line(line, pfx):
+        if line.startswith('#') or not line.strip():
+            return line
+        return pfx + line
+
     with open(output_file, 'w') as f:
         f.write(f"# Auto-generated trace for {attack_type.upper()}\n")
         f.write("#\n# === PHASE 1: SETUP ===\n")
-        for line in setup_lines: f.write(line + "\n")
-        
+        for line in setup_lines:
+            f.write(prefix_line(line, attacker_prefix) + "\n")
+
         f.write("\n# === PHASE 2: VICTIM ===\n")
-        for line in victim_lines: f.write(line + "\n")
-        
+        for line in victim_lines:
+            if line.startswith('# ') and len(line) > 2 and not line.startswith('# ---') and not line.startswith('# Replace'):
+                f.write('# ' + victim_prefix + line[2:] + "\n")
+            else:
+                f.write(line + "\n")
+
         f.write("\n# === PHASE 3: TEST ===\n")
-        for line in probe_lines: f.write(line + "\n")
+        for line in probe_lines:
+            f.write(prefix_line(line, attacker_prefix) + "\n")
 
 def main():
     parser = argparse.ArgumentParser(description='Generate traces for cache attacks.')
@@ -114,6 +127,12 @@ def main():
     parser.add_argument('-a', '--attack-type', choices=['prime_probe', 'flush_reload', 'flush_flush'], required=True)
     parser.add_argument('-o', '--output-file', default='attack_trace.txt')
     parser.add_argument('-s', '--target-set', type=int, default=None)
+    parser.add_argument('-m', '--multi-core', action='store_true',
+                        help='Generate multi-core trace with core_id prefix on each line')
+    parser.add_argument('--attacker-core', type=int, default=0,
+                        help='Core ID for attacker lines (default: 0)')
+    parser.add_argument('--victim-core', type=int, default=1,
+                        help='Core ID for victim placeholder lines (default: 1)')
     args = parser.parse_args()
 
     with open(args.config_file) as f:
@@ -121,7 +140,13 @@ def main():
 
     geometry = compute_cache_geometry(configs)
     setup_lines, victim_lines, probe_lines = generate_trace(geometry, args.target_set, args.attack_type)
-    write_trace_file(geometry, setup_lines, victim_lines, probe_lines, args.output_file, args.attack_type)
+
+    attacker_prefix = str(args.attacker_core) + ' ' if args.multi_core else ''
+    victim_prefix   = str(args.victim_core)   + ' ' if args.multi_core else ''
+
+    write_trace_file(geometry, setup_lines, victim_lines, probe_lines,
+                     args.output_file, args.attack_type,
+                     attacker_prefix, victim_prefix)
     print(f"Trace template ({args.attack_type}) written to: {args.output_file}")
 
 if __name__ == '__main__':
