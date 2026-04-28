@@ -1,5 +1,5 @@
 class Block:
-    def __init__(self, block_size, current_step, dirty, address, coherence_state='I'):
+    def __init__(self, block_size, current_step, dirty, address, coherence_state="I"):
         self.size = block_size
         self.dirty_bit = dirty
         self.last_accessed = current_step
@@ -27,9 +27,10 @@ class Block:
         """Set MSI coherence state ('M', 'S', or 'I')"""
         self.coherence_state = state
         # Modified state implies dirty
-        if state == 'M':
+        if state == "M":
             self.dirty_bit = True
 
     def get_coherence_state(self):
         """Get current MSI coherence state"""
         return self.coherence_state
+

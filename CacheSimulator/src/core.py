@@ -22,15 +22,15 @@ class Core:
         # Check L1 coherence state
         state = self.l1_cache.get_coherence_state(address)
 
-        self.logger.info(f'\t[Core {self.core_id}] Read {address}, L1 state: {state}')
+        self.logger.info(f"\t[Core {self.core_id}] Read {address}, L1 state: {state}")
 
-        if state in ['M', 'S']:
+        if state in ["M", "S"]:
             # Valid state - can read locally
-            self.logger.info(f'\t[Core {self.core_id}] L1 hit in state {state}')
+            self.logger.info(f"\t[Core {self.core_id}] L1 hit in state {state}")
             return self.l1_cache.local_read(address, current_step)
         else:
             # Invalid state - need to fetch via bus
-            self.logger.info(f'\t[Core {self.core_id}] L1 miss, requesting via bus')
+            self.logger.info(f"\t[Core {self.core_id}] L1 miss, requesting via bus")
             return self.bus.coherent_read(self.core_id, address, current_step)
 
     def write(self, address, current_step):
@@ -46,29 +46,33 @@ class Core:
         # Check L1 coherence state
         state = self.l1_cache.get_coherence_state(address)
 
-        self.logger.info(f'\t[Core {self.core_id}] Write {address}, L1 state: {state}')
+        self.logger.info(f"\t[Core {self.core_id}] Write {address}, L1 state: {state}")
 
-        if state == 'M':
+        if state == "M":
             # Already have exclusive ownership - can write locally
-            self.logger.info(f'\t[Core {self.core_id}] L1 hit in state M')
+            self.logger.info(f"\t[Core {self.core_id}] L1 hit in state M")
             return self.l1_cache.local_write(address, current_step)
 
-        elif state == 'S':
+        elif state == "S":
             # Shared state - need to upgrade (invalidate other copies)
-            self.logger.info(f'\t[Core {self.core_id}] L1 hit in state S, upgrading to M')
+            self.logger.info(
+                f"\t[Core {self.core_id}] L1 hit in state S, upgrading to M"
+            )
             return self.bus.coherent_upgrade(self.core_id, address, current_step)
 
         else:
             # Invalid state - need to fetch with exclusive access
-            self.logger.info(f'\t[Core {self.core_id}] L1 miss, requesting exclusive via bus')
+            self.logger.info(
+                f"\t[Core {self.core_id}] L1 miss, requesting exclusive via bus"
+            )
             return self.bus.coherent_write(self.core_id, address, current_step)
 
     def flush(self, address, current_step):
         """Flush a single block from L1 and notify the directory."""
         state = self.l1_cache.get_coherence_state(address)
         r = self.l1_cache.flush(address, current_step)
-        if state != 'I':
-            self.bus.directory.process_eviction(self.core_id, address, state == 'M')
+        if state != "I":
+            self.bus.directory.process_eviction(self.core_id, address, state == "M")
         return r
 
     def flush_all(self, current_step):
@@ -80,7 +84,7 @@ class Core:
         ]
         r = self.l1_cache.flush_all(current_step)
         for addr, state, is_dirty in blocks:
-            if state != 'I':
+            if state != "I":
                 self.bus.directory.process_eviction(self.core_id, addr, is_dirty)
         return r
 
@@ -98,24 +102,30 @@ class Core:
         """
         state = self.l1_cache.get_coherence_state(address)
 
-        self.logger.info(f'\t[Core {self.core_id}] Received BusRd for {address} from Core {requesting_core_id}, state: {state}')
+        self.logger.info(
+            f"\t[Core {self.core_id}] Received BusRd for {address} from Core {requesting_core_id}, state: {state}"
+        )
 
-        if state == 'M':
+        if state == "M":
             # We have modified data - must supply and downgrade
-            self.logger.info(f'\t[Core {self.core_id}] Supplying data and downgrading M → S')
+            self.logger.info(
+                f"\t[Core {self.core_id}] Supplying data and downgrading M → S"
+            )
             data = self.l1_cache.supply_data(address)
             self.l1_cache.downgrade_to_shared(address)
             # Note: In real implementation, would write back to memory here
             return data
 
-        elif state == 'S':
+        elif state == "S":
             # We have shared data - memory can supply
-            self.logger.info(f'\t[Core {self.core_id}] We have shared copy, memory will supply')
+            self.logger.info(
+                f"\t[Core {self.core_id}] We have shared copy, memory will supply"
+            )
             return None
 
         else:
             # We don't have it
-            self.logger.info(f'\t[Core {self.core_id}] We don\'t have {address}')
+            self.logger.info(f"\t[Core {self.core_id}] We don't have {address}")
             return None
 
     def handle_bus_read_exclusive(self, address, requesting_core_id):
@@ -132,23 +142,29 @@ class Core:
         """
         state = self.l1_cache.get_coherence_state(address)
 
-        self.logger.info(f'\t[Core {self.core_id}] Received BusRdX for {address} from Core {requesting_core_id}, state: {state}')
+        self.logger.info(
+            f"\t[Core {self.core_id}] Received BusRdX for {address} from Core {requesting_core_id}, state: {state}"
+        )
 
-        if state == 'M':
+        if state == "M":
             # We have modified data - must supply, write back, and invalidate
-            self.logger.info(f'\t[Core {self.core_id}] Supplying data and invalidating (M → I)')
+            self.logger.info(
+                f"\t[Core {self.core_id}] Supplying data and invalidating (M → I)"
+            )
             data = self.l1_cache.supply_data(address)
             self.l1_cache.invalidate_block(address)
             # Note: In real implementation, would write back to memory here
             return data
 
-        elif state == 'S':
+        elif state == "S":
             # We have shared data - just invalidate
-            self.logger.info(f'\t[Core {self.core_id}] Invalidating shared copy (S → I)')
+            self.logger.info(
+                f"\t[Core {self.core_id}] Invalidating shared copy (S → I)"
+            )
             self.l1_cache.invalidate_block(address)
             return None
 
         else:
             # We don't have it
-            self.logger.info(f'\t[Core {self.core_id}] We don\'t have {address}')
+            self.logger.info(f"\t[Core {self.core_id}] We don't have {address}")
             return None

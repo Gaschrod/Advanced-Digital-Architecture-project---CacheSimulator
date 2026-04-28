@@ -1,5 +1,5 @@
 class Response:
-    def __init__(self, hit_list, time, actor='UNKNOWN', data=''):
+    def __init__(self, hit_list, time, actor="UNKNOWN", data=""):
         self.hit_list = hit_list
         self.time = time
         self.actor = actor
@@ -8,3 +8,4 @@ class Response:
     def deepen(self, time, name):
         self.hit_list[name] = False
         self.time += time
+
