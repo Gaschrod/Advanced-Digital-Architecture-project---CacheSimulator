@@ -542,14 +542,14 @@ def analyze_multicore_results(hierarchy, responses, logger, attack_type=None):
     # Overall statistics (could add AMAT calculation for shared L2 here)
     logger.info('Note: Multi-core AMAT calculation not yet implemented')
 
-    # Attack analysis — mirrors analyze_results() single-core logic
+    # Attack analysis — roughly mirrors analyze_results() single-core logic
     attacker_responses = [r for r in responses if r.actor == 'ATTACKER']
     victim_responses   = [r for r in responses if r.actor == 'VICTIM']
 
     if attacker_responses and victim_responses:
         if attack_type == 'prime_probe':
             logger.info('\n=== Prime & Probe Analysis (Multi-Core) ===')
-            analyze_prime_probe(hierarchy['cache_1_core_0'], attacker_responses, logger)
+            analyze_prime_probe(hierarchy.get('cache_1_core_0'), attacker_responses, logger)
         elif attack_type == 'flush_reload':
             logger.info('\n=== Flush & Reload Analysis (Multi-Core) ===')
             analyze_flush_reload(hierarchy, responses, logger)
@@ -557,10 +557,12 @@ def analyze_multicore_results(hierarchy, responses, logger, attack_type=None):
             logger.info('\n=== Flush & Flush Analysis (Multi-Core) ===')
             analyze_flush_flush(responses, logger)
         else:
-            logger.info('\nNo attack type specified. Use -a to enable attack analysis.')
+            logger.info('\nNo attack type specified, skipping attack analysis. Use -a or --attack-type to specify an attack type for analysis.')
     elif attack_type:
         logger.info('\nAttack type specified but no VICTIM accesses found in trace — skipping analysis.')
         logger.info('Add victim accesses to the VICTIM PHASE section of your trace file.')
+    elif attacker_responses and not victim_responses and not attack_type:
+        logger.info('\nAttacker accesses detected but no VICTIM accesses found in trace.')
 
 
 if __name__ == '__main__':
