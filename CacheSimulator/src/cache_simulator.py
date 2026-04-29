@@ -18,6 +18,21 @@ def main():
         "-t", "--trace-file", help="Tracefile containing instructions", required=True
     )
     parser.add_argument(
+            "-m",
+            "--multi-core",
+            help="Enable multi-core simulation with MSI coherence",
+            required=False,
+            action="store_true",
+            )
+    parser.add_argument(
+            "-n",
+            "--num-cores",
+            help="Number of cores for multi-core simulation (default: 2)",
+            type=int,
+            required=False,
+            default=2,
+            )
+    parser.add_argument(
         "-p",
         "--policy",
         choices=["lru", "mru", "nru", "lfu", "fifo", "lifo", "filo", "random"],
@@ -44,21 +59,6 @@ def main():
         help="Draw cache layouts",
         required=False,
         action="store_true",
-    )
-    parser.add_argument(
-        "-m",
-        "--multi-core",
-        help="Enable multi-core simulation with MSI coherence",
-        required=False,
-        action="store_true",
-    )
-    parser.add_argument(
-        "-n",
-        "--num-cores",
-        help="Number of cores for multi-core simulation (default: 2)",
-        type=int,
-        required=False,
-        default=2,
     )
     arguments = vars(parser.parse_args())
 
