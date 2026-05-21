@@ -3,7 +3,7 @@ class Response:
         """Initialize a Response instance.
 
         Parameters
-            hit_list 
+            hit_list
                 dict
                 Mapping from actor name to boolean indicating hit status.
             time
@@ -40,3 +40,4 @@ class Response:
         """
         self.hit_list[name] = False
         self.time += time
+

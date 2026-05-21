@@ -33,4 +33,3 @@ class Block:
     def get_coherence_state(self):
         """Get current MSI coherence state"""
         return self.coherence_state
-

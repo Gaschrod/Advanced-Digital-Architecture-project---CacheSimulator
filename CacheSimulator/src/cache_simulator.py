@@ -53,20 +53,20 @@ def main():
         "-t", "--trace-file", help="Tracefile containing instructions", required=True
     )
     parser.add_argument(
-            "-m",
-            "--multi-core",
-            help="Enable multi-core simulation with MSI coherence",
-            required=False,
-            action="store_true",
-            )
+        "-m",
+        "--multi-core",
+        help="Enable multi-core simulation with MSI coherence",
+        required=False,
+        action="store_true",
+    )
     parser.add_argument(
-            "-n",
-            "--num-cores",
-            help="Number of cores for multi-core simulation (default: 2)",
-            type=int,
-            required=False,
-            default=2,
-            )
+        "-n",
+        "--num-cores",
+        help="Number of cores for multi-core simulation (default: 2)",
+        type=int,
+        required=False,
+        default=2,
+    )
     parser.add_argument(
         "-p",
         "--policy",
@@ -454,7 +454,12 @@ def analyze_prime_probe(l1, attacker_responses, logger):
         status = (
             "HIT  (set untouched)" if hit_in_l1 else "MISS (victim accessed this set!)"
         )
-        logger.info("Probe address: " + str(getattr(probe_r, "address", "<unknown>")) + " -> " + status)
+        logger.info(
+            "Probe address: "
+            + str(getattr(probe_r, "address", "<unknown>"))
+            + " -> "
+            + status
+        )
         if not hit_in_l1:
             compromised_sets.append(probe_r)
 
