@@ -26,7 +26,7 @@ def main():
         -m / --multi-core (flag): Enable multi-core simulation with MSI coherence.
         -n / --num-cores (int, default=2): Number of cores for multi-core mode.
         -p / --policy (str, default='lru'): Replacement policy. One of:
-                lru, mru, nru, lfu, fifo, lifo, filo, random.
+                lru, mru, nru, lfu, fifo, lifo, random.
         -a / --attack-type (str, optional): Attack analysis mode. One of:
                 prime_probe, flush_reload, flush_flush.
         -l / --log-file (str, optional): Log file name (default 'cache_simulator.log').
@@ -70,8 +70,8 @@ def main():
     parser.add_argument(
         "-p",
         "--policy",
-        choices=["lru", "mru", "nru", "lfu", "fifo", "lifo", "filo", "random"],
-        help="Eviction policy to use (lru, mru, nru, lfu, fifo, lifo, filo, random)",
+        choices=["lru", "mru", "nru", "lfu", "fifo", "lifo", "random"],
+        help="Eviction policy to use (lru, mru, nru, lfu, fifo, lifo, random)",
         type=str.lower,
         required=False,
         default="lru",
@@ -160,9 +160,6 @@ def main():
                     print_cache(hierarchy[cache_item])
 
 
-# Print the contents of a cache as a table
-# If the table is too long, it will print the first few sets,
-# break, and then print the last set
 def print_cache(cache):
     """
     Print a human-readable table of a cache's contents.
@@ -190,8 +187,6 @@ def print_cache(cache):
         for way_no in range(cache.associativity):
             ways.append("Way " + str(way_no))
 
-        # Build rows for the table. If there are many sets, show the first few
-        # followed by an ellipsis block and the last set to avoid an overly long output.
         sets.append(ways)
         if len(set_indexes) > table_size + 4 - 1:
             for s in range(min(table_size, len(set_indexes) - 4)):
@@ -231,7 +226,6 @@ def print_cache(cache):
         print(table.table)
 
 
-# Loop through the instructions in the tracefile and use the given memory hierarchy to find AMAT (Average Memory Access Time)
 def simulate(hierarchy, trace, logger, attack_type):
     """
     Execute a single-core trace against the provided memory hierarchy.
@@ -420,8 +414,27 @@ def compute_amat(level, responses, logger, results={}):
 
 
 def analyze_prime_probe(l1, attacker_responses, logger):
-    # The trace template guarantees: first N are prime, last N are probe
-    # (N = total attacker accesses / 2)
+    """
+    Analyze Prime+Probe attack results.
+
+    The function assumes attacker_responses contains two consecutive phases:
+    - Prime phase: first half of the responses where the attacker fills targeted sets.
+    - Probe phase: second half where the attacker re-accesses the same addresses to
+      detect whether the victim evicted any of the attacker's lines.
+
+    Each response object in attacker_responses is expected to provide:
+        - address: memory address (string or numeric) accessed by the attacker.
+        - hit_list: mapping from cache level name to boolean indicating hit (True)
+          or miss (False).
+
+    Args:
+        l1: L1 cache object (used to determine the L1 cache name via l1.name).
+        attacker_responses: list of Response-like objects for attacker accesses.
+        logger: logging.Logger instance used to record analysis output.
+
+    Returns:
+        None. Results are emitted to the provided logger.
+    """
     mid = len(attacker_responses) // 2
     prime_responses = attacker_responses[:mid]
     probe_responses = attacker_responses[mid:]
@@ -429,14 +442,19 @@ def analyze_prime_probe(l1, attacker_responses, logger):
     logger.info("Probe results (miss = victim accessed that set):")
     compromised_sets = []
 
+    # Determine the L1 cache name (handles single- and multi-core hierarchies)
+    l1_name = getattr(l1, "name", "cache_1")
+
     for prime_r, probe_r in zip(prime_responses, probe_responses):
-        # Get the address from the probe response's hit_list context
+        # Log the prime address (prime_r is intentionally used)
+        logger.info("Prime address: " + str(getattr(prime_r, "address", "<unknown>")))
+
         # A miss on probe means the victim evicted the attacker's line
-        hit_in_l1 = probe_r.hit_list.get("cache_1", False)
+        hit_in_l1 = probe_r.hit_list.get(l1_name, False)
         status = (
             "HIT  (set untouched)" if hit_in_l1 else "MISS (victim accessed this set!)"
         )
-        logger.info("Probe address: " + str(probe_r.address) + " -> " + status)
+        logger.info("Probe address: " + str(getattr(probe_r, "address", "<unknown>")) + " -> " + status)
         if not hit_in_l1:
             compromised_sets.append(probe_r)
 
@@ -444,6 +462,35 @@ def analyze_prime_probe(l1, attacker_responses, logger):
 
 
 def analyze_flush_reload(hierarchy, responses, logger):
+    """
+    Analyze Flush+Reload attack results.
+
+    This analysis aims to determine which cache lines the victim accessed by
+    comparing attacker flush and subsequent reload timings.
+
+    Algorithm:
+      1. Determine the shared last-level cache (LLC) and main memory latencies.
+      2. Compute a timing threshold as the midpoint between LLC hit time and memory hit time.
+      3. Find addresses flushed by the attacker (flush phase) where flush_hit is set.
+      4. For those addresses, find subsequent attacker reads (reloads) that have no
+         flush_hit recorded and classify each reload as FAST (LLC) or SLOW (memory)
+         using the threshold.
+
+    Expectations for responses list elements:
+        - actor: 'ATTACKER' or 'VICTIM'
+        - address
+        - time: observed access time (cycles)
+        - flush_hit: True/False/None (None typically indicates a reload measurement)
+
+    Args:
+        hierarchy: dict mapping cache names to cache objects. Must include 'mem'
+            and a last-level cache discoverable by get_llc_name().
+        responses: list of Response-like objects collected during simulation.
+        logger: logging.Logger instance used for output.
+
+    Returns:
+        None. Findings are logged via the provided logger.
+    """
     llc_name = get_llc_name(hierarchy)
     llc = hierarchy[llc_name]
     mem = hierarchy["mem"]
@@ -487,8 +534,30 @@ def analyze_flush_reload(hierarchy, responses, logger):
 
 
 def analyze_flush_flush(responses, logger):
-    # Flush+Flush is only meaningful if the attacker and victim share a cache line, so we look for flushes that hit in the victim's accesses
+    """
+    Analyze Flush+Flush attack results.
 
+    Flush+Flush relies on timing differences of the flush instruction itself.
+    This routine:
+      1. Collects attacker flushes for which a flush outcome (flush_hit) was recorded.
+      2. Treats the second flush to the same address as the probe flush.
+      3. Interprets a probe flush that reports a hit (flush_hit == True) as evidence
+         that the victim accessed the line (slow flush), and a miss as evidence
+         that the victim did not (fast flush).
+
+    Each response object is expected to include:
+        - actor: 'ATTACKER' or 'VICTIM'
+        - address
+        - time: measured cycles for the flush operation
+        - flush_hit: True/False/None (non-None for flush measurements)
+
+    Args:
+        responses: list of Response-like objects collected during simulation.
+        logger: logging.Logger instance used for output.
+
+    Returns:
+        None. Results are emitted to the provided logger.
+    """
     attacker_flushes = [
         r
         for r in responses

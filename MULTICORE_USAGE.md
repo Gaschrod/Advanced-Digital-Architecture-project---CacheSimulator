@@ -31,7 +31,7 @@ python cache_simulator.py \
 |------|-----------|-------------|---------|
 | `-c` | `--config-file` | YAML config file | required |
 | `-t` | `--trace-file` | Trace file | required |
-| `-p` | `--policy` | `lru`, `mru`, `nru`, `lfu`, `fifo`, `lifo`, `filo`, `random` | `lru` |
+| `-p` | `--policy` | `lru`, `mru`, `nru`, `lfu`, `fifo`, `lifo`, `random` | `lru` |
 | `-m` | `--multi-core` | Enable multi-core MSI mode | off |
 | `-n` | `--num-cores` | Number of cores | 2 |
 | `-l` | `--log-file` | Output log file name | `cache_simulator.log` |

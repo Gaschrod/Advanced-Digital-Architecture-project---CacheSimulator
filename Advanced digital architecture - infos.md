@@ -158,7 +158,7 @@ With trashing (trying to read 3 blocks one after the other with only 2 sets):
 
 <u>Optional:</u>
  - [x] Last in first out (LIFO)
- - [x] First in last out (FILO)
+ - [x] First in last out (FILO) -> removed because same thing as LIFO
  - [x] Not recently used (NRU)
 
 As of now, the simulator uses **LRU**

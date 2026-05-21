@@ -54,6 +54,22 @@ class Cache:
                 self.data[index] = {}
 
     def eviction(self, index):
+        """Dispatch to the configured eviction policy and select a tag to evict.
+
+        This method consults self.policy and invokes the corresponding
+        concrete eviction-policy method (LRU, MRU, LFU, NRU, FIFO, LIFO or
+        random) for the provided set index. It returns the tag chosen for
+        eviction.
+
+        Args:
+            index (str): Binary string representing the set index.
+
+        Returns:
+            str: Tag selected for eviction.
+
+        Raises:
+            ValueError: If self.policy does not match a known policy.
+        """
         match self.policy:
             case "lru":
                 return self.LRU_policy(index)
@@ -67,29 +83,77 @@ class Cache:
                 return self.FIFO_policy(index)
             case "lifo":
                 return self.LIFO_policy(index)
-            case "filo":
-                return self.FILO_policy(index)
             case "random":
                 return self.random_policy(index)
             case _:
                 raise ValueError(f"Unknown eviction policy: {self.policy}")
 
     def LRU_policy(self, index):
+        """Least-Recently-Used (LRU) policy.
+
+        Selects the tag whose block has the smallest last_accessed timestamp
+        (i.e. the block that was used the longest time ago).
+
+        Args:
+            index (str): Set index whose blocks are considered.
+
+        Returns:
+            str: Tag selected for eviction.
+        """
         return min(
             self.data[index], key=lambda tag: self.data[index][tag].last_accessed
         )
 
     def MRU_policy(self, index):
+        """Most-Recently-Used (MRU) policy.
+
+        Selects the tag whose block has the largest last_accessed timestamp
+        (i.e. the block that was used most recently). Typically used less
+        frequently than LRU.
+
+        Args:
+            index (str): Set index whose blocks are considered.
+
+        Returns:
+            str: Tag selected for eviction.
+        """
         return max(
             self.data[index], key=lambda tag: self.data[index][tag].last_accessed
         )
 
     def LFU_policy(self, index):
+        """Least-Frequently-Used (LFU) policy.
+
+        Selects the tag whose block has the smallest access_count (fewest
+        accesses). Ties are resolved by the min() function which choses the first minimum it encounters.
+
+        Args:
+            index (str): Set index whose blocks are considered.
+
+        Returns:
+            str: Tag selected for eviction.
+        """
         return min(self.data[index], key=lambda tag: self.data[index][tag].access_count)
 
     def NRU_policy(self, index):
-        # NRU uses a per-block reference bit: prefer blocks with bit=0.
-        # If all are referenced, clear the set's bits and choose among all blocks.
+        """Not-Recently-Used (NRU) policy (simple reference-bit variant).
+
+        NRU prefers blocks whose per-block 'referenced' bit is False. If at
+        least one block is unreferenced, choose among those. If all blocks are
+        referenced, clear the referenced bits for the entire set and then
+        choose using insertion_time as a deterministic tie-breaker (oldest
+        insertion wins).
+
+        Notes:
+            - This is a simplified NRU implementation (single reference bit per
+              block) and does not implement the full 4-class NRU classification.
+
+        Args:
+            index (str): Set index whose blocks are considered.
+
+        Returns:
+            str: Tag selected for eviction.
+        """
         candidates = [
             tag
             for tag, blk in self.data[index].items()
@@ -103,27 +167,83 @@ class Cache:
         return min(candidates, key=lambda tag: self.data[index][tag].insertion_time)
 
     def FIFO_policy(self, index):
+        """First-In-First-Out (FIFO) policy.
+
+        Evicts the block with the smallest insertion_time (the oldest inserted
+        block in the set).
+
+        Args:
+            index (str): Set index whose blocks are considered.
+
+        Returns:
+            str: Tag selected for eviction.
+        """
         return min(
             self.data[index], key=lambda tag: self.data[index][tag].insertion_time
         )
 
     def LIFO_policy(self, index):
-        return max(
-            self.data[index], key=lambda tag: self.data[index][tag].insertion_time
-        )
+        """Last-In-First-Out (LIFO) policy.
 
-    def FILO_policy(self, index):
+        Evicts the most recently inserted block (largest insertion_time).
+
+        Args:
+            index (str): Set index whose blocks are considered.
+
+        Returns:
+            str: Tag selected for eviction.
+        """
         return max(
             self.data[index], key=lambda tag: self.data[index][tag].insertion_time
         )
 
     def random_policy(self, index):
+        """Random eviction policy.
+
+        Chooses a tag uniformly at random from the set. Useful for testing or
+        policy comparison.
+
+        Args:
+            index (str): Set index whose blocks are considered.
+
+        Returns:
+            str: Tag selected for eviction.
+        """
         return random.choice(list(self.data[index].keys()))
 
     def mark_referenced(self, index, tag):
+        """Mark the referenced flag for a block to True
+
+        This is used by replacement policies to track recent usage.
+        """
         self.data[index][tag].referenced = True
 
     def read(self, address, current_step):
+        """Execute a read access for the given hexadecimal address.
+
+        Behavior summary:
+        - If this cache has no next level, return a hit response with this
+          cache's hit_time (terminal level).
+        - Otherwise parse the address into (block_offset, index, tag) and:
+          * On hit: update the block metadata (access time), mark it as
+            referenced and return a hit response.
+          * On miss with free space in the set: fetch the block from the next
+            level, insert it as a clean block, and return the aggregated
+            response time (including this cache's write_time for allocation).
+          * On miss and set full: select a victim via the configured eviction
+            policy. If write-back is enabled and the victim is dirty, write it
+            back to the next level before fetching the requested block. Insert
+            the fetched block and return the aggregated response including any
+            write-back time.
+
+        Args:
+            address (str): Hexadecimal address string (without 0x prefix).
+            current_step (int): Current simulation step for timestamping.
+
+        Returns:
+            response.Response: Response object containing hit_list and the
+            accumulated access time for this operation.
+        """
         r = None
         if not self.next_level:
             r = response.Response({self.name: True}, self.hit_time)
@@ -180,6 +300,36 @@ class Cache:
         return r
 
     def write(self, address, from_cpu, current_step):
+        """Execute a write access for the given hexadecimal address.
+
+        Behavior summary:
+        - If this cache has no next level, return a hit response with this
+          cache's write_time (terminal level).
+        - Otherwise parse the address into (block_offset, index, tag) and:
+          * On hit: update the block metadata, mark referenced. If write-back
+            is enabled the write is completed locally and a local write-time
+            response is returned; otherwise the write is propagated to the
+            next level (write-through).
+          * On miss with free space in the set:
+            - write-back (write-allocate): fetch the block from the next
+              level, insert it as dirty and return the aggregated time.
+            - write-through (no-write-allocate): forward the write to the
+              next level and account for tag-check timing.
+          * On miss when the set is full: select a victim via the eviction
+            policy. If write-back is enabled and the victim is dirty, write
+            it back prior to any allocation. Allocation semantics follow the
+            write-back / write-through policies described above.
+
+        Args:
+            address (str): Hexadecimal address string (without 0x prefix).
+            from_cpu (bool): True when the write originates from the CPU; the
+                flag is forwarded to lower levels when propagating writes.
+            current_step (int): Current simulation step for timestamping.
+
+        Returns:
+            response.Response: Response object containing hit_list and the
+            accumulated access time for this operation.
+        """
         r = None
         if not self.next_level:
             r = response.Response({self.name: True}, self.write_time)
@@ -270,6 +420,23 @@ class Cache:
         return r
 
     def flush(self, address, current_step):
+        """Flush a single block corresponding to address from this cache.
+
+        If the block is present and dirty, propagate a flush to the next level
+        and account for this cache's write_time. If present and clean, the
+        flush still propagates but no write-back time is added. The block is
+        removed from this cache in either case. If the block is not present
+        here the request is forwarded to the next level and the miss tag
+        check timing is accounted for.
+
+        Args:
+            address (str): Hexadecimal address string (without 0x prefix).
+            current_step (int): Current simulation step for timestamping.
+
+        Returns:
+            response.Response: Response object representing the flush timing
+            and hit information.
+        """
         r = None
         if not self.next_level:
             r = response.Response({self.name: True}, self.write_time)
@@ -293,6 +460,22 @@ class Cache:
         return r
 
     def flush_all(self, current_step):
+        """Flush all dirty blocks from this cache to lower levels and reset.
+
+        Iterates over all sets in this cache and for each dirty block invokes
+        next_level.flush to propagate data to lower levels. The cumulative time
+        spent flushing (including per-block tag/write-back costs) is returned
+        in the response. After flushing, this cache's sets are reinitialized
+        (cache emptied). If there are further lower levels, the flush_all
+        operation is recursively invoked on them.
+
+        Args:
+            current_step (int): Current simulation step for timestamping.
+
+        Returns:
+            response.Response: Response object containing the total time
+            consumed by the flush_all operation for this cache.
+        """
         r = None
         if not self.next_level:
             r = response.Response({self.name: True}, self.write_time)
@@ -319,6 +502,20 @@ class Cache:
         return r
 
     def parse_address(self, address):
+        """Parse a hexadecimal address string into (block_offset, index, tag).
+
+        The address parameter is expected to be a hexadecimal string (without
+        a leading "0x"). The method computes the binary representation of the
+        address using the configured block_offset_size and index_size and
+        returns each component as a binary string.
+
+        Args:
+            address (str): Hexadecimal address string.
+
+        Returns:
+            tuple[str, str, str]: (block_offset, index, tag) each represented
+            as a binary string (index may be "0" when index_size is zero).
+        """
         address_size = len(address) * 4
         binary_address = bin(int(address, 16))[2:].zfill(address_size)
 
