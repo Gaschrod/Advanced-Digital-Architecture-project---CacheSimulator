@@ -4,8 +4,43 @@ import yaml, cache, argparse, logging, pprint
 from terminaltables.other_tables import UnixTable
 import core, bus, directory
 
+"""Cache simulator main module.
+
+Parses command-line arguments, loads simulation configuration and trace files,
+builds a cache/memory hierarchy, runs the requested simulation mode, and
+optionally prints cache layouts.
+"""
+
 
 def main():
+    """
+    Main entry point for the cache simulator.
+
+    Parses command-line arguments, configures logging, loads a YAML configuration
+    and a trace file, builds either a single-core or multi-core memory hierarchy,
+    runs the requested simulation mode, and optionally prints cache layouts.
+
+    Command-line options:
+        -c / --config-file (str, required): Path to the YAML configuration file.
+        -t / --trace-file (str, required): Path to the trace file with instructions.
+        -m / --multi-core (flag): Enable multi-core simulation with MSI coherence.
+        -n / --num-cores (int, default=2): Number of cores for multi-core mode.
+        -p / --policy (str, default='lru'): Replacement policy. One of:
+                lru, mru, nru, lfu, fifo, lifo, filo, random.
+        -a / --attack-type (str, optional): Attack analysis mode. One of:
+                prime_probe, flush_reload, flush_flush.
+        -l / --log-file (str, optional): Log file name (default 'cache_simulator.log').
+        -d / --draw-cache (flag): If set, draw cache layouts after simulation.
+
+    Side effects:
+        - Creates or truncates the log file.
+        - Writes logs to the specified log file and to stdout.
+        - Loads modules and calls build_hierarchy / build_multicore_hierarchy,
+            simulate / simulate_multicore, and print_cache as appropriate.
+
+    Returns:
+        None
+    """
     # Set up our arguments
     parser = argparse.ArgumentParser(description="Simulate a cache")
     parser.add_argument(
@@ -51,9 +86,6 @@ def main():
     )
     parser.add_argument("-l", "--log-file", help="Log file name", required=False)
     parser.add_argument(
-        "-b", "--beautify", help="Use colors", required=False, action="store_true"
-    )
-    parser.add_argument(
         "-d",
         "--draw-cache",
         help="Draw cache layouts",
@@ -64,9 +96,6 @@ def main():
 
     policy = arguments["policy"]
     attack_type = arguments["attack_type"]
-
-    if arguments["beautify"]:
-        import colorer
 
     log_filename = "cache_simulator.log"
     if arguments["log_file"]:
@@ -135,21 +164,34 @@ def main():
 # If the table is too long, it will print the first few sets,
 # break, and then print the last set
 def print_cache(cache):
+    """
+    Print a human-readable table of a cache's contents.
+
+    The table lists sets (rows) and ways (columns). If the cache contains
+    many sets the output prints the first few sets, an ellipsis block, and
+    the final set to keep the output concise.
+
+    Args:
+        cache: cache.Cache instance to display. The function reads the
+            following attributes from the cache object:
+                - cache.data: mapping of set_index -> {way_index: Line}
+                - cache.associativity: number of ways
+                - cache.name: human-readable cache name used as the table title
+
+    Side effects:
+        Prints the formatted table to stdout using terminaltables.other_tables.UnixTable.
+    """
     table_size = 5
     ways = [""]
     sets = []
     set_indexes = sorted(cache.data.keys())
-    if len(cache.data.keys()) > 0:
-        first_key = list(cache.data.keys())[0]
-        way_no = 0
-
+    if len(set_indexes) > 0:
         # Label the columns
-        for way in range(cache.associativity):
+        for way_no in range(cache.associativity):
             ways.append("Way " + str(way_no))
-            way_no += 1
 
-        # Print either all the sets if the cache is small, or just a few
-        # sets and then the last set
+        # Build rows for the table. If there are many sets, show the first few
+        # followed by an ellipsis block and the last set to avoid an overly long output.
         sets.append(ways)
         if len(set_indexes) > table_size + 4 - 1:
             for s in range(min(table_size, len(set_indexes) - 4)):
@@ -159,12 +201,14 @@ def print_cache(cache):
                     temp_way.append(cache.data[set_indexes[s]][w].address)
                 sets.append(temp_way)
 
-            for i in range(3):
+            # Ellipsis rows to indicate skipped middle sets
+            for _ in range(3):
                 temp_way = ["."]
-                for w in range(cache.associativity):
+                for _ in range(cache.associativity):
                     temp_way.append("")
                 sets.append(temp_way)
 
+            # Append last set
             set_ways = cache.data[set_indexes[len(set_indexes) - 1]].keys()
             temp_way = ["Set " + str(len(set_indexes) - 1)]
             for w in set_ways:
@@ -189,6 +233,33 @@ def print_cache(cache):
 
 # Loop through the instructions in the tracefile and use the given memory hierarchy to find AMAT (Average Memory Access Time)
 def simulate(hierarchy, trace, logger, attack_type):
+    """
+    Execute a single-core trace against the provided memory hierarchy.
+
+    The simulator expects trace lines in one of the following two formats:
+      - "<address> <op> <actor>" where <actor> is "ATTACKER" or "VICTIM"
+      - "<address> <op>" (actor will be treated as "UNKNOWN")
+
+    Supported operations (<op>):
+      - "R": Read — invokes L1.read(address, current_step)
+      - "W": Write — invokes L1.write(address, True, current_step)
+      - "F": Flush — invokes L1.flush(address, current_step) and records whether
+               the flush hit any cache level other than main memory.
+      - "FA": Flush All — invokes L1.flush_all(current_step) and ignores the address
+
+    Args:
+        hierarchy: dict mapping cache names to cache objects. The L1 cache is
+            expected to be available under the key "cache_1".
+        trace: list of instruction strings (typically loaded from a trace file).
+        logger: logging.Logger instance used for informational and warning output.
+        attack_type: optional attack analysis mode passed through to analyze_results.
+
+    Side effects:
+        - Calls methods on the L1 cache which propagate to lower levels and
+          return Response objects. Those responses are collected and passed
+          to analyze_results() at the end of the run.
+        - Logs per-instruction details including the hit_list and timing.
+    """
     responses = []
     # We only interface directly with L1. Reads and writes will automatically interact with lower levels of the hierarchy
     l1 = hierarchy["cache_1"]
