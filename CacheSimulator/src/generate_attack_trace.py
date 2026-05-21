@@ -7,8 +7,12 @@ Usage:
 
 Arguments:
     -c / --config-file   : YAML config file (required)
-    -o / --output-file   : Output trace file (default: prime_probe_trace.txt)
+    -a / --attack-type   : Attack type: prime_probe, flush_reload, or flush_flush (required)
+    -o / --output-file   : Output trace file (default: attack_trace.txt)
     -s / --target-set    : Target a specific set index only (default: all sets)
+    -m / --multi-core    : Generate multi-core trace with core_id prefix (optional)
+    --attacker-core      : Core ID for attacker lines (default: 0, requires -m)
+    --victim-core        : Core ID for victim placeholder lines (default: 1, requires -m)
 
 Output format:
     A ready-to-use trace template with:
@@ -24,7 +28,7 @@ Address construction:
     - offset bits  = log2(block_size)   → selects byte within block
     - index bits   = log2(n_sets)       → selects the cache set
     - tag bits     = everything above   → different tags = different ways
-    
+
     For fully associative caches (n_sets=1, index_bits=0):
     - All addresses map to the same single set
     - Way separation is achieved purely through different tag values
@@ -32,35 +36,41 @@ Address construction:
 
 import yaml, math, argparse, sys
 
+
 def compute_cache_geometry(configs):
-    block_size   = configs['architecture']['block_size']
-    n_blocks     = configs['cache_1']['blocks']
-    associativity = configs['cache_1']['associativity']
-    n_sets       = n_blocks // associativity
-    offset_bits  = int(math.log2(block_size))
-    index_bits   = int(math.log2(n_sets)) if n_sets > 1 else 0
+    block_size = configs["architecture"]["block_size"]
+    n_blocks = configs["cache_1"]["blocks"]
+    associativity = configs["cache_1"]["associativity"]
+    n_sets = n_blocks // associativity
+    offset_bits = int(math.log2(block_size))
+    index_bits = int(math.log2(n_sets)) if n_sets > 1 else 0
 
     return {
-        'block_size': block_size, 'n_blocks': n_blocks,
-        'associativity': associativity, 'n_sets': n_sets,
-        'offset_bits': offset_bits, 'index_bits': index_bits,
+        "block_size": block_size,
+        "n_blocks": n_blocks,
+        "associativity": associativity,
+        "n_sets": n_sets,
+        "offset_bits": offset_bits,
+        "index_bits": index_bits,
     }
+
 
 def make_address(set_index, way_index, offset_bits, index_bits):
     address = (way_index << (index_bits + offset_bits)) | (set_index << offset_bits)
     return f"{address:08X}"
 
+
 def generate_trace(geometry, target_set, attack_type):
-    n_sets = geometry['n_sets']
-    associativity = geometry['associativity']
-    offset_bits = geometry['offset_bits']
-    index_bits = geometry['index_bits']
+    n_sets = geometry["n_sets"]
+    associativity = geometry["associativity"]
+    offset_bits = geometry["offset_bits"]
+    index_bits = geometry["index_bits"]
 
     sets_to_target = [target_set] if target_set is not None else list(range(n_sets))
-    
+
     setup_lines, victim_lines, probe_lines = [], [], []
 
-    if attack_type == 'prime_probe':
+    if attack_type == "prime_probe":
         for s in sets_to_target:
             setup_lines.append(f"# --- Set {s} ---")
             probe_lines.append(f"# --- Set {s} ---")
@@ -73,56 +83,123 @@ def generate_trace(geometry, target_set, attack_type):
         for s in sets_to_target:
             setup_lines.append(f"# --- Set {s} ---")
             probe_lines.append(f"# --- Set {s} ---")
-            addr = make_address(s, 0, offset_bits, index_bits) 
-            
+            addr = make_address(s, 0, offset_bits, index_bits)
+
             # Phase 1: Vider la ligne du cache (Flush)
             setup_lines.append(f"{addr} F ATTACKER")
-            
+
             # Phase 3: Probe
-            if attack_type == 'flush_reload':
-                probe_lines.append(f"{addr} R ATTACKER") # Recharger (Read)
-            elif attack_type == 'flush_flush':
-                probe_lines.append(f"{addr} F ATTACKER") # Re-flusher (Flush)
+            if attack_type == "flush_reload":
+                probe_lines.append(f"{addr} R ATTACKER")  # Recharger (Read)
+            elif attack_type == "flush_flush":
+                probe_lines.append(f"{addr} F ATTACKER")  # Re-flusher (Flush)
 
     victim_lines.append("# --- VICTIM PHASE ---")
     victim_lines.append("# Replace these lines with your actual victim accesses.")
-    for s in sets_to_target[:min(2, len(sets_to_target))]:
-        if attack_type == 'prime_probe':
+    for s in sets_to_target[: min(2, len(sets_to_target))]:
+        if attack_type == "prime_probe":
             example_addr = make_address(s, associativity, offset_bits, index_bits)
         else:
             example_addr = make_address(s, 0, offset_bits, index_bits)
-            
+
         victim_lines.append(f"# {example_addr} R VICTIM")
-        
+
     return setup_lines, victim_lines, probe_lines
 
-def write_trace_file(geometry, setup_lines, victim_lines, probe_lines, output_file, attack_type):
-    with open(output_file, 'w') as f:
+
+def write_trace_file(
+    setup_lines,
+    victim_lines,
+    probe_lines,
+    output_file,
+    attack_type,
+    attacker_prefix="",
+    victim_prefix="",
+):
+    def prefix_line(line, pfx):
+        if line.startswith("#") or not line.strip():
+            return line
+        return pfx + line
+
+    with open(output_file, "w") as f:
         f.write(f"# Auto-generated trace for {attack_type.upper()}\n")
         f.write("#\n# === PHASE 1: SETUP ===\n")
-        for line in setup_lines: f.write(line + "\n")
-        
+        for line in setup_lines:
+            f.write(prefix_line(line, attacker_prefix) + "\n")
+
         f.write("\n# === PHASE 2: VICTIM ===\n")
-        for line in victim_lines: f.write(line + "\n")
-        
+        for line in victim_lines:
+            if line.startswith("# "):
+                content = line[2:]
+                parts = content.split()
+                if len(parts) == 3 and parts[2] == "VICTIM":
+                    f.write("# " + victim_prefix + content + "\n")
+                else:
+                    f.write(line + "\n")
+            else:
+                f.write(line + "\n")
+
         f.write("\n# === PHASE 3: TEST ===\n")
-        for line in probe_lines: f.write(line + "\n")
+        for line in probe_lines:
+            f.write(prefix_line(line, attacker_prefix) + "\n")
+
 
 def main():
-    parser = argparse.ArgumentParser(description='Generate traces for cache attacks.')
-    parser.add_argument('-c', '--config-file', required=True)
-    parser.add_argument('-a', '--attack-type', choices=['prime_probe', 'flush_reload', 'flush_flush'], required=True)
-    parser.add_argument('-o', '--output-file', default='attack_trace.txt')
-    parser.add_argument('-s', '--target-set', type=int, default=None)
+    parser = argparse.ArgumentParser(description="Generate traces for cache attacks.")
+    parser.add_argument("-c", "--config-file", required=True)
+    parser.add_argument(
+        "-a",
+        "--attack-type",
+        choices=["prime_probe", "flush_reload", "flush_flush"],
+        required=True,
+    )
+    parser.add_argument("-o", "--output-file", default="attack_trace.txt")
+    parser.add_argument("-s", "--target-set", type=int, default=None)
+    parser.add_argument(
+        "-m",
+        "--multi-core",
+        action="store_true",
+        help="Generate multi-core trace with core_id prefix on each line",
+    )
+    parser.add_argument(
+        "--attacker-core",
+        type=int,
+        default=0,
+        help="Core ID for attacker lines (default: 0)",
+    )
+    parser.add_argument(
+        "--victim-core",
+        type=int,
+        default=1,
+        help="Core ID for victim placeholder lines (default: 1)",
+    )
     args = parser.parse_args()
+
+    if not args.multi_core and (args.attacker_core != 0 or args.victim_core != 1):
+        parser.error("--attacker-core and --victim-core require --multi-core (-m)")
 
     with open(args.config_file) as f:
         configs = yaml.safe_load(f)
 
     geometry = compute_cache_geometry(configs)
-    setup_lines, victim_lines, probe_lines = generate_trace(geometry, args.target_set, args.attack_type)
-    write_trace_file(geometry, setup_lines, victim_lines, probe_lines, args.output_file, args.attack_type)
+    setup_lines, victim_lines, probe_lines = generate_trace(
+        geometry, args.target_set, args.attack_type
+    )
+
+    attacker_prefix = f"{args.attacker_core} " if args.multi_core else ""
+    victim_prefix = f"{args.victim_core} " if args.multi_core else ""
+
+    write_trace_file(
+        setup_lines,
+        victim_lines,
+        probe_lines,
+        args.output_file,
+        args.attack_type,
+        attacker_prefix,
+        victim_prefix,
+    )
     print(f"Trace template ({args.attack_type}) written to: {args.output_file}")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

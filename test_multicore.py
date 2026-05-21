@@ -147,13 +147,14 @@ TESTS = [
         "name": "T09 — Flush in multi-core (directory notified after flush)",
         "trace": "T09_flush_multicore.txt",
         "num_cores": 2,
-        # F op at step 1 produces no time entry
+        # F op at step 1 now produces a time entry (flush response collected)
         "expected_times": [
             (1021, "Core 0 write miss I→M"),
+            (1001, "Core 0 flush 00000050, bus(5) + L2-hit(1016) evict"),
             (1021, "Core 1 read: directory correctly shows I → full memory fetch (5+1016)"),
             (1,    "Core 1 local hit in S"),
         ],
-        "expected_total": 2043,
+        "expected_total": 3044,
         "notes": [
             "FIX: core.flush() now calls directory.process_eviction() → M→I transition.",
             "Core 1 no longer gets a bogus 15-cycle cache-to-cache; it pays the real 1021-cycle cost.",
