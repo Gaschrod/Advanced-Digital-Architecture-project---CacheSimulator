@@ -1,5 +1,5 @@
 # T09 — Flush in multi-core context
-# After fix: core.flush() notifies the directory after removing the block.
+# core.flush() notifies the directory after removing the block.
 # Directory transitions M→I so the next reader correctly fetches from memory.
 #
 # Expected step times:
@@ -13,5 +13,6 @@
 
 0 00000050 W
 0 00000050 F
+0 00000800 F
 1 00000050 R
 1 00000050 R
