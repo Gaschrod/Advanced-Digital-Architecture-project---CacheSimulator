@@ -56,11 +56,6 @@ class Cache:
     def eviction(self, index):
         """Dispatch to the configured eviction policy and select a tag to evict.
 
-        This method consults self.policy and invokes the corresponding
-        concrete eviction-policy method (LRU, MRU, LFU, NRU, FIFO, LIFO or
-        random) for the provided set index. It returns the tag chosen for
-        eviction.
-
         Args:
             index (str): Binary string representing the set index.
 
@@ -422,12 +417,16 @@ class Cache:
     def flush(self, address, current_step):
         """Flush a single block corresponding to address from this cache.
 
-        If the block is present and dirty, propagate a flush to the next level
-        and account for this cache's write_time. If present and clean, the
-        flush still propagates but no write-back time is added. The block is
-        removed from this cache in either case. If the block is not present
-        here the request is forwarded to the next level and the miss tag
-        check timing is accounted for.
+        Timing model:
+        - Normal case (miss or clean hit): tag-check cost at each level +
+          write_time at the terminal, totalling ~1001 for a typical hierarchy.
+        - Dirty hit: the accumulated flush time is doubled at the level where
+          the dirty block is found, modelling the extra writeback traffic to
+          memory (simplified: dirty writeback = 2 × normal flush time).
+
+        If the block is present and dirty, the flush cost is doubled to account
+        for the writeback. If present and clean, the block is removed with no
+        extra penalty. If not present, the miss tag-check time is charged.
 
         Args:
             address (str): Hexadecimal address string (without 0x prefix).
@@ -447,6 +446,8 @@ class Cache:
                 if self.data[index][tag].is_dirty():
                     r = self.next_level.flush(address, current_step)
                     r.deepen(self.write_time, self.name)
+                    # Dirty writeback to memory costs twice the normal flush time.
+                    r.time *= 2
                 else:
                     r = self.next_level.flush(address, current_step)
                     r.deepen(0, self.name)
@@ -529,7 +530,9 @@ class Cache:
         return (block_offset, index, tag)
 
     # ==================== Coherence Methods for Multi-Core ====================
-    # Implemented with reference to wikipedia MSI protocol and directory based cache coherence pages.
+    # Processor events : PrRd, PrWr
+    # Bus transactions : BusRd (read miss), BusRdX (write miss), BusUpgr (write hit on S), Flush (eviction/writeback)
+    # States           : M (Modified, exclusive dirty), S (Shared, clean), I (Invalid)
 
     def get_coherence_state(self, address):
         """Get coherence state of a block ('M', 'S', or 'I')"""
@@ -541,7 +544,13 @@ class Cache:
         return self.data[index][tag].get_coherence_state()
 
     def invalidate_block(self, address):
-        """Invalidate a block (coherence callback from bus)"""
+        """Invalidate a block on a bus-triggered coherence message.
+
+        - BusRdX (via Inv)     : S → I
+        - BusRdX (via FetchInv): M → I
+        - BusUpgr (via Inv)    : S → I
+        """
+
         block_offset, index, tag = self.parse_address(address)
 
         if index in self.data and tag in self.data[index]:
@@ -553,7 +562,7 @@ class Cache:
             del self.data[index][tag]
 
     def downgrade_to_shared(self, address):
-        """Downgrade block from Modified to Shared (bus intervention)"""
+        """Downgrade block from Modified to Shared on BusRd intervention (M → S, Flush)."""
         block_offset, index, tag = self.parse_address(address)
 
         if index in self.data and tag in self.data[index]:
@@ -564,7 +573,7 @@ class Cache:
             self.data[index][tag].clean()  # No longer dirty
 
     def upgrade_to_modified(self, address):
-        """Upgrade block from Shared to Modified"""
+        """Upgrade block from Shared to Modified on BusUpgr (S → M, no data fetch)."""
         block_offset, index, tag = self.parse_address(address)
 
         if index in self.data and tag in self.data[index]:
@@ -617,7 +626,7 @@ class Cache:
         return eviction_result
 
     def supply_data(self, address):
-        """Supply data to another cache (coherence callback for intervention)"""
+        """Supply data to the bus during Flush intervention (BusRd M→S or BusRdX M→I)."""
         block_offset, index, tag = self.parse_address(address)
 
         if index in self.data and tag in self.data[index]:
@@ -627,7 +636,7 @@ class Cache:
         return None
 
     def local_read(self, address, current_step):
-        """Local read without coherence check (coherence already validated)"""
+        """Perform a local read after coherence is satisfied (PrRd hit: M→M or S→S)."""
         block_offset, index, tag = self.parse_address(address)
 
         if index in self.data and tag in self.data[index]:
@@ -642,7 +651,7 @@ class Cache:
             return response.Response({self.name: False}, 0)
 
     def local_write(self, address, current_step):
-        """Local write without coherence check (coherence already validated)"""
+        """Perform a local write after coherence is satisfied (PrWr hit: M→M, or after BusRdX/BusUpgr installs M)."""
         block_offset, index, tag = self.parse_address(address)
 
         if index in self.data and tag in self.data[index]:

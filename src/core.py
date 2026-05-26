@@ -7,68 +7,79 @@ class Core:
         self.bus = bus
         self.logger = logger
 
-        # Register this core with the bus
+        # Register this core with the bus (which also registers it with the directory)
         self.bus.register_core(self)
 
     def read(self, address, current_step):
-        """Process a read request from this core
+        """Process a read request (PrRd) from this core.
 
-        Implements MSI protocol read logic:
-        - If block in M or S state: local read (hit)
-        - If block in I state: coherent read via bus (miss)
+        MSI processor-side transitions on PrRd:
+        - M --PrRd--> M : hit, read locally
+        - S --PrRd--> S : hit, read locally
+        - I --PrRd--> S : miss, send BusRd to directory
 
         Returns: Response object with timing and hit/miss info
         """
-        # Check L1 coherence state
         state = self.l1_cache.get_coherence_state(address)
 
-        self.logger.info(f"\t[Core {self.core_id}] Read {address}, L1 state: {state}")
+        self.logger.info(f"\t[Core {self.core_id}] PrRd {address}, L1 state: {state}")
 
         if state in ["M", "S"]:
-            # Valid state - can read locally
+            # M --PrRd--> M  /  S --PrRd--> S : hit, no bus transaction needed
             self.logger.info(f"\t[Core {self.core_id}] L1 hit in state {state}")
             return self.l1_cache.local_read(address, current_step)
         else:
-            # Invalid state - need to fetch via bus
-            self.logger.info(f"\t[Core {self.core_id}] L1 miss, requesting via bus")
+            # I --PrRd--> S : miss, send BusRd to directory
+            self.logger.info(f"\t[Core {self.core_id}] L1 miss, issuing BusRd")
             return self.bus.coherent_read(self.core_id, address, current_step)
 
     def write(self, address, current_step):
-        """Process a write request from this core
+        """Process a write request (PrWr) from this core.
 
-        Implements MSI protocol write logic:
-        - If block in M state: local write (hit)
-        - If block in S state: upgrade to M (invalidate others)
-        - If block in I state: coherent write via bus (miss)
+        MSI processor-side transitions on PrWr:
+        - M --PrWr--> M : hit, write locally
+        - S --PrWr--> M : hit, send BusUpgr to directory (no data fetch)
+        - I --PrWr--> M : miss, send BusRdX to directory (fetch data + invalidate all)
 
         Returns: Response object with timing and hit/miss info
         """
-        # Check L1 coherence state
         state = self.l1_cache.get_coherence_state(address)
 
-        self.logger.info(f"\t[Core {self.core_id}] Write {address}, L1 state: {state}")
+        self.logger.info(f"\t[Core {self.core_id}] PrWr {address}, L1 state: {state}")
 
         if state == "M":
-            # Already have exclusive ownership - can write locally
+            # M --PrWr--> M : hit, already have exclusive ownership
             self.logger.info(f"\t[Core {self.core_id}] L1 hit in state M")
             return self.l1_cache.local_write(address, current_step)
 
         elif state == "S":
-            # Shared state - need to upgrade (invalidate other copies)
-            self.logger.info(
-                f"\t[Core {self.core_id}] L1 hit in state S, upgrading to M"
-            )
-            return self.bus.coherent_upgrade(self.core_id, address, current_step)
+            # S --PrWr--> M : hit, send BusUpgr to directory
+            self.logger.info(f"\t[Core {self.core_id}] L1 hit in state S, issuing BusUpgr")
+            r = self.bus.coherent_upgrade(self.core_id, address, current_step)
+            # Update block metadata (LRU/NRU timestamps, access count, dirty bit).
+            # The bus transaction time already covers the write; the local_write
+            # response is intentionally discarded.
+            _ = self.l1_cache.local_write(address, current_step)
+            return r
 
         else:
-            # Invalid state - need to fetch with exclusive access
-            self.logger.info(
-                f"\t[Core {self.core_id}] L1 miss, requesting exclusive via bus"
-            )
-            return self.bus.coherent_write(self.core_id, address, current_step)
+            # I --PrWr--> M : miss, send BusRdX to directory
+            self.logger.info(f"\t[Core {self.core_id}] L1 miss, issuing BusRdX")
+            r = self.bus.coherent_write(self.core_id, address, current_step)
+            # Update block metadata (LRU/NRU timestamps, access count, dirty bit).
+            # The bus transaction time already covers the write; the local_write
+            # response is intentionally discarded.
+            _ = self.l1_cache.local_write(address, current_step)
+            return r
 
     def flush(self, address, current_step):
-        """Flush a single block from L1 and notify the directory."""
+        """Evict a block from L1 and notify the directory (Flush).
+
+        MSI processor-side transitions on Flush:
+        - M --Flush--> I : write dirty block back to memory, invalidate
+        - S --Flush--> I : drop clean copy, invalidate
+        - I --Flush--> I : nothing to do
+        """
         state = self.l1_cache.get_coherence_state(address)
         r = self.l1_cache.flush(address, current_step)
         if state != "I":
@@ -76,7 +87,10 @@ class Core:
         return r
 
     def flush_all(self, current_step):
-        """Flush all blocks from L1 and notify the directory for each."""
+        """Evict all blocks from L1 and notify the directory (Flush) for each.
+
+        Applies M --Flush--> I and S --Flush--> I to every cached block.
+        """
         blocks = [
             (blk.address, blk.get_coherence_state(), blk.is_dirty())
             for index in self.l1_cache.data
@@ -88,83 +102,56 @@ class Core:
                 self.bus.directory.process_eviction(self.core_id, addr, is_dirty)
         return r
 
-    def handle_bus_read(self, address, requesting_core_id):
-        """Handle BusRd request from another core (coherence callback)
+    # ── Messages received from the directory ──────────────────────────────────
 
-        Called when another core wants to read a block.
+    def receive_fetch(self, address, requesting_core_id):
+        """Receive a Fetch message from the directory (M → S).
 
-        MSI transitions:
-        - M → S: Supply data, write back to memory, downgrade to Shared
-        - S → S: Do nothing (memory supplies data)
-        - I → I: Do nothing (we don't have it)
-
-        Returns: Data if we supplied it, None otherwise
+        Sent by the directory when another core issues BusRd and this cache
+        holds the block in Modified state. This core must supply the data and
+        downgrade to Shared.
         """
         state = self.l1_cache.get_coherence_state(address)
-
         self.logger.info(
-            f"\t[Core {self.core_id}] Received BusRd for {address} from Core {requesting_core_id}, state: {state}"
+            f"\t[Core {self.core_id}] Received Fetch from directory for {address}"
+            f" (requested by Core {requesting_core_id}), state: {state}"
         )
+        # M → S : supply data and downgrade
+        data = self.l1_cache.supply_data(address)
+        self.l1_cache.downgrade_to_shared(address)
+        # Per MSI protocol, "Flush to bus" (dirty writeback to memory) is required here.
+        # Omitted in this simulation because data values are not tracked.
+        return data
 
-        if state == "M":
-            # We have modified data - must supply and downgrade
-            self.logger.info(
-                f"\t[Core {self.core_id}] Supplying data and downgrading M → S"
-            )
-            data = self.l1_cache.supply_data(address)
-            self.l1_cache.downgrade_to_shared(address)
-            # Note: In real implementation, would write back to memory here
-            return data
+    def receive_fetch_inv(self, address, requesting_core_id):
+        """Receive a FetchInv message from the directory (M → I).
 
-        elif state == "S":
-            # We have shared data - memory can supply
-            self.logger.info(
-                f"\t[Core {self.core_id}] We have shared copy, memory will supply"
-            )
-            return None
-
-        else:
-            # We don't have it
-            self.logger.info(f"\t[Core {self.core_id}] We don't have {address}")
-            return None
-
-    def handle_bus_read_exclusive(self, address, requesting_core_id):
-        """Handle BusRdX request from another core (coherence callback)
-
-        Called when another core wants exclusive access (for write).
-
-        MSI transitions:
-        - M → I: Supply data, write back to memory, invalidate
-        - S → I: Just invalidate
-        - I → I: Do nothing (we don't have it)
-
-        Returns: Data if we supplied it, None otherwise
+        Sent by the directory when another core issues BusRdX and this cache
+        holds the block in Modified state. This core must supply the data and
+        invalidate its copy.
         """
         state = self.l1_cache.get_coherence_state(address)
-
         self.logger.info(
-            f"\t[Core {self.core_id}] Received BusRdX for {address} from Core {requesting_core_id}, state: {state}"
+            f"\t[Core {self.core_id}] Received FetchInv from directory for {address}"
+            f" (requested by Core {requesting_core_id}), state: {state}"
         )
+        # M → I : supply data and invalidate
+        data = self.l1_cache.supply_data(address)
+        self.l1_cache.invalidate_block(address)
+        # Per MSI protocol, "Flush to bus" (dirty writeback to memory) is required here.
+        # Omitted in this simulation because data values are not tracked.
+        return data
 
-        if state == "M":
-            # We have modified data - must supply, write back, and invalidate
-            self.logger.info(
-                f"\t[Core {self.core_id}] Supplying data and invalidating (M → I)"
-            )
-            data = self.l1_cache.supply_data(address)
-            self.l1_cache.invalidate_block(address)
-            # Note: In real implementation, would write back to memory here
-            return data
+    def receive_inv(self, address, requesting_core_id):
+        """Receive an Inv message from the directory (S → I).
 
-        elif state == "S":
-            # We have shared data - just invalidate
-            self.logger.info(
-                f"\t[Core {self.core_id}] Invalidating shared copy (S → I)"
-            )
-            self.l1_cache.invalidate_block(address)
-            return None
-
-        else:
-            # We don't have it
-            self.logger.info(f"\t[Core {self.core_id}] We don't have {address}")
-            return None
+        Sent by the directory when another core issues BusRdX or BusUpgr and
+        this cache holds a Shared copy. This core must invalidate its copy.
+        """
+        state = self.l1_cache.get_coherence_state(address)
+        self.logger.info(
+            f"\t[Core {self.core_id}] Received Inv from directory for {address}"
+            f" (requested by Core {requesting_core_id}), state: {state}"
+        )
+        # S → I : invalidate
+        self.l1_cache.invalidate_block(address)

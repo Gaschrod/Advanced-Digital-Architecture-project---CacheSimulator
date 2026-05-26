@@ -2,60 +2,57 @@ import response
 
 
 class Bus:
-    """System bus/interconnect for cache coherence messages"""
+    """Interconnect between processor cores and the directory controller.
+
+    In this directory-based MSI implementation the bus has two responsibilities:
+    1. Forward processor requests (BusRd, BusRdX, BusUpgr) to the directory.
+    2. Fetch data from the shared cache / memory when needed and install blocks
+       in the requesting core's L1 cache.
+
+    All coherence decisions — which caches to contact and what messages to send
+    (Fetch, FetchInv, Inv) — are made by the directory, not the bus.
+    """
 
     def __init__(self, directory, shared_cache, logger):
         self.directory = directory
-        self.shared_cache = shared_cache  # Shared L2 cache
-        self.cores = {}  # core_id -> Core object
+        self.shared_cache = shared_cache  # Shared L2 cache / memory
+        self.cores = {}  # core_id -> Core
         self.logger = logger
         self.transaction_time = 5  # Bus transaction overhead in cycles
-        self.cache_to_cache_time = 10  # Cache-to-cache transfer time
+        self.cache_to_cache_time = (
+            10  # Extra latency when data comes from another cache
+        )
 
     def register_core(self, core):
-        """Register a core on the bus"""
+        """Register a core on the bus and with the directory."""
         self.cores[core.core_id] = core
+        self.directory.register_core(core)
         self.logger.info(f"[Bus] Registered Core {core.core_id}")
 
     def coherent_read(self, core_id, address, current_step):
-        """Handle coherent read request (BusRd)
+        """Forward BusRd to the directory (I --PrRd--> S).
 
-        Called when a core has a read miss and needs to fetch the block.
+        This method fetches data from the shared cache or accounts for cache-to-cache transfer time, then installs the block
+        in the requesting core's L1 in Shared state.
 
         Returns: Response object with timing information
         """
-        self.logger.info(f"\t[Bus] Core {core_id} requests BusRd for {address}")
+        self.logger.info(f"\t[Bus] Forwarding BusRd from Core {core_id} for {address}")
 
-        # Consult directory
-        action = self.directory.process_read(core_id, address)
+        # Directory handles coherence (sends Fetch to owner if needed)
+        result = self.directory.process_read(core_id, address)
 
         total_time = self.transaction_time
-        data = None
 
-        if action["type"] == "fetch_from_memory":
-            # No other cache has it, get from shared L2/memory
-            self.logger.info(f"\t[Bus] Fetching from shared cache/memory")
+        if result["source"] == "memory":
+            # Data comes from shared cache / memory
             r = self.shared_cache.read(address, current_step)
             total_time += r.time
-            data = r
-
-        elif action["type"] == "fetch_from_owner":
-            # Another cache has it in Modified state, need intervention
-            owner_id = action["owner"]
-            self.logger.info(f"\t[Bus] Intervention: Core {owner_id} must supply data")
-            data = self.cores[owner_id].handle_bus_read(address, core_id)
+        else:
+            # Data comes from the former owner (cache-to-cache transfer)
             total_time += self.cache_to_cache_time
 
-        elif action["type"] == "fetch_from_shared":
-            # Shared by others, get from shared cache/memory (clean copy)
-            self.logger.info(
-                f"\t[Bus] Fetching from shared cache (others have clean copies)"
-            )
-            r = self.shared_cache.read(address, current_step)
-            total_time += r.time
-            data = r
-
-        # Install block in requesting core's cache in Shared state
+        # Install block in Shared state in the requesting core's L1
         requesting_core = self.cores[core_id]
         eviction = requesting_core.l1_cache.install_block(address, "S", current_step)
         if eviction is not None:
@@ -63,47 +60,32 @@ class Bus:
             total_time += wb_time
             self.directory.process_eviction(core_id, evicted_addr, evicted_dirty)
 
-        # Return response (miss at L1, but fetched successfully)
         return response.Response({f"core_{core_id}_L1": False}, total_time)
 
     def coherent_write(self, core_id, address, current_step):
-        """Handle coherent write request for a miss (BusRdX)
+        """Forward BusRdX to the directory (I --PrWr--> M).
 
-        Called when a core has a write miss and needs exclusive access.
+        This method fetches data from the shared cache or accounts for cache-to-cache transfer time, then installs the
+        block in the requesting core's L1 in Modified state.
 
         Returns: Response object with timing information
         """
-        self.logger.info(
-            f"\t[Bus] Core {core_id} requests BusRdX (write miss) for {address}"
-        )
+        self.logger.info(f"\t[Bus] Forwarding BusRdX from Core {core_id} for {address}")
 
-        # Consult directory
-        action = self.directory.process_write(core_id, address)
+        # Directory handles coherence (sends Inv or FetchInv as needed)
+        result = self.directory.process_write(core_id, address)
 
         total_time = self.transaction_time
 
-        # Invalidate all sharers
-        if action["invalidate"] and action["sharers"]:
-            for sharer_id in action["sharers"]:
-                if sharer_id != core_id:
-                    self.logger.info(
-                        f"\t[Bus] Sending invalidation to Core {sharer_id}"
-                    )
-                    self.cores[sharer_id].handle_bus_read_exclusive(address, core_id)
-
-        # Get data if needed
-        if action["type"] == "fetch_from_memory":
-            self.logger.info(f"\t[Bus] Fetching from shared cache/memory")
+        if result["source"] == "memory":
+            # Data comes from shared cache / memory
             r = self.shared_cache.read(address, current_step)
             total_time += r.time
-
-        elif action["type"] == "fetch_from_owner":
-            owner_id = action["owner"]
-            self.logger.info(f"\t[Bus] Intervention: Core {owner_id} must supply data")
-            data = self.cores[owner_id].handle_bus_read_exclusive(address, core_id)
+        else:
+            # Data comes from the former owner (cache-to-cache transfer)
             total_time += self.cache_to_cache_time
 
-        # Install block in Modified state
+        # Install block in Modified state in the requesting core's L1
         requesting_core = self.cores[core_id]
         eviction = requesting_core.l1_cache.install_block(address, "M", current_step)
         if eviction is not None:
@@ -111,29 +93,25 @@ class Bus:
             total_time += wb_time
             self.directory.process_eviction(core_id, evicted_addr, evicted_dirty)
 
-        # Return response (miss at L1)
         return response.Response({f"core_{core_id}_L1": False}, total_time)
 
     def coherent_upgrade(self, core_id, address, current_step):
-        """Handle upgrade request from Shared to Modified
+        """Forward BusUpgr to the directory (S --PrWr--> M).
 
-        Called when a core has a write hit to a Shared block.
+        The directory sends Inv to all other sharers. No data fetch is needed
+        since the requesting core already holds a valid Shared copy. The block
+        is then upgraded to Modified state locally.
 
         Returns: Response object with timing information
         """
-        self.logger.info(f"\t[Bus] Core {core_id} requests upgrade (S→M) for {address}")
+        self.logger.info(
+            f"\t[Bus] Forwarding BusUpgr from Core {core_id} for {address}"
+        )
 
-        # Consult directory to get other sharers
-        action = self.directory.process_upgrade(core_id, address)
+        # Directory handles coherence (sends Inv to other sharers)
+        self.directory.process_upgrade(core_id, address)
 
-        # Invalidate other sharers
-        for sharer_id in action["sharers"]:
-            if sharer_id != core_id:
-                self.logger.info(f"\t[Bus] Sending invalidation to Core {sharer_id}")
-                self.cores[sharer_id].l1_cache.invalidate_block(address)
-
-        # Upgrade local block to Modified
+        # S → M : upgrade local block (no data fetch needed)
         self.cores[core_id].l1_cache.upgrade_to_modified(address)
 
-        # Return response (hit at L1, but needed bus transaction for upgrade)
         return response.Response({f"core_{core_id}_L1": True}, self.transaction_time)
