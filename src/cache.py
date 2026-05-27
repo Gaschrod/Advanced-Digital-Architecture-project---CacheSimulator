@@ -294,6 +294,48 @@ class Cache:
 
         return r
 
+    def compute_flush_time(self):
+        """Compute the flush time from this level down to memory (base case when there are no data to evict).
+
+        The base flush time equals the sum of `hit_time` for every cache
+        level from this cache down to (but not including) the terminal
+        level, plus the terminal level's `write_time` (main memory).
+        """
+        time = 0
+        cur = self
+        # Sum hit_time for every cache that has a next_level
+        while cur and cur.next_level:
+            time += cur.hit_time
+            cur = cur.next_level
+        # cur is now the terminal level (no next_level)
+        if cur:
+            time += getattr(cur, "write_time", cur.hit_time)
+        return time
+
+    def scan_for_presence(self, address):
+        """Scan this cache and lower levels for the presence of data in line.
+
+        Returns a list of tuples (level_obj, level_name, present_bool, is_dirty_bool)
+        ordered from this level down to the terminal level.
+        """
+        res = []
+        cur = self
+        while cur:
+            _, index, tag = cur.parse_address(address)
+        
+            present = False
+            dirty = False
+            if index in cur.data and tag in cur.data[index]:
+                present = True
+                dirty = cur.data[index][tag].is_dirty()
+
+            res.append((cur, cur.name, present, dirty))
+            if not cur.next_level:
+                break
+            cur = cur.next_level
+
+        return res
+
     def write(self, address, from_cpu, current_step):
         """Execute a write access for the given hexadecimal address.
 
@@ -418,15 +460,10 @@ class Cache:
         """Flush a single block corresponding to address from this cache.
 
         Timing model:
-        - Normal case (miss or clean hit): tag-check cost at each level +
-          write_time at the terminal, totalling ~1001 for a typical hierarchy.
-        - Dirty hit: the accumulated flush time is doubled at the level where
-          the dirty block is found, modelling the extra writeback traffic to
-          memory (simplified: dirty writeback = 2 × normal flush time).
-
-        If the block is present and dirty, the flush cost is doubled to account
-        for the writeback. If present and clean, the block is removed with no
-        extra penalty. If not present, the miss tag-check time is charged.
+        - Normal case (miss): tag-check cost at each level + write_time in main memory (terminal level).
+        - Hit: the accumulated flush time is doubled to account for the write-back or eviction cost. 
+        This is a simplification for the purpose of this project; in a real system the flush time would depend 
+        on the specific implementation and hardware architecture.        
 
         Args:
             address (str): Hexadecimal address string (without 0x prefix).
@@ -436,29 +473,36 @@ class Cache:
             response.Response: Response object representing the flush timing
             and hit information.
         """
-        r = None
-        if not self.next_level:
-            r = response.Response({self.name: True}, self.write_time)
-        else:
-            block_offset, index, tag = self.parse_address(address)
-            in_cache = list(self.data[index].keys())
-            if tag in in_cache:
-                if self.data[index][tag].is_dirty():
-                    r = self.next_level.flush(address, current_step)
-                    r.deepen(self.write_time, self.name)
-                    # Dirty writeback to memory costs twice the normal flush time.
-                    r.time *= 2
-                else:
-                    r = self.next_level.flush(address, current_step)
-                    r.deepen(0, self.name)
-                r.hit_list[self.name] = (
-                    True  # If data was present in this cache, we consider it a hit for the purpose of timing analysis
-                )
-                del self.data[index][tag]
-            else:
-                r = self.next_level.flush(address, current_step)
-                r.deepen(self.hit_time, self.name)
-        return r
+        # Compute baseline flush time (no-data path)
+        base_time = self.compute_flush_time()
+
+        # Scan hierarchy for presence of the block
+        presence = self.scan_for_presence(address)
+
+        # Determine whether any cache level (excluding terminal memory) contained data
+        mem_name = presence[-1][1] if presence else None
+        data_present = any(p for (_lvl, name, p, _d) in presence if name != mem_name)
+
+        # Perform state changes: write back dirty blocks and remove the block
+        # from any cache level where it is present.
+        for (lvl, name, present, dirty) in presence:
+            if not present:
+                continue
+            if dirty and lvl.next_level:
+                # Write back dirty block to the next level to update state.                
+                lvl.next_level.write(address, True, current_step)
+            # Remove the block from this cache level
+            _, idx, tg = lvl.parse_address(address)
+            if idx in lvl.data and tg in lvl.data[idx]:
+                del lvl.data[idx][tg]
+
+        # Build hit_list mapping (True if present at that level before eviction)
+        hit_list = {name: present for (_lvl, name, present, _d) in presence}
+
+        # Final time: doubled if any data was present (clean or dirty) in caches
+        final_time = base_time * (2 if data_present else 1)
+
+        return response.Response(hit_list, final_time)
 
     def flush_all(self, current_step):
         """Flush all dirty blocks from this cache to lower levels and reset.
@@ -477,30 +521,36 @@ class Cache:
             response.Response: Response object containing the total time
             consumed by the flush_all operation for this cache.
         """
-        r = None
         if not self.next_level:
-            r = response.Response({self.name: True}, self.write_time)
-        else:
-            r = response.Response({self.name: True}, 0)
-            for index in self.data.keys():
-                for tag in list(self.data[index].keys()):
-                    address = self.data[index][tag].address
-                    if self.data[index][tag].is_dirty():
-                        self.logger.info("\tFlushing block " + address + " to memory")
-                        temp = self.next_level.flush(address, current_step)
-                        temp.deepen(self.flush_hit_time, self.name)
-                        r.time += temp.time
-            # Reinitialize all sets
-            self.data = {}
-            for i in range(self.n_sets):
-                index = str(bin(i))[2:].zfill(self.index_size)
-                if index == "":
-                    index = "0"
-                self.data[index] = {}
-            # Recursively flush all lower levels
-            if self.next_level.next_level:
-                self.next_level.flush_all(current_step)
-        return r
+            # Terminal level: no intrinsic flush_all cost
+            return response.Response({self.name: True}, self.write_time)
+
+        # Collect all addresses currently cached here
+        addresses = []
+        for index in list(self.data.keys()):
+            for tag in list(self.data[index].keys()):
+                addresses.append(self.data[index][tag].address)
+
+        total_time = 0
+        for addr in addresses:
+            # flush() will evict the block from all levels and return the
+            # appropriate time (doubled if any cache contained the block).
+            temp = self.flush(addr, current_step)
+            total_time += temp.time
+
+        # Reinitialize all sets locally (should already be empty after flushes)
+        self.data = {}
+        for i in range(self.n_sets):
+            index = str(bin(i))[2:].zfill(self.index_size)
+            if index == "":
+                index = "0"
+            self.data[index] = {}
+
+        # Recursively flush lower levels
+        if self.next_level and self.next_level.next_level:
+            self.next_level.flush_all(current_step)
+
+        return response.Response({self.name: True}, total_time)
 
     def parse_address(self, address):
         """Parse a hexadecimal address string into (block_offset, index, tag).
