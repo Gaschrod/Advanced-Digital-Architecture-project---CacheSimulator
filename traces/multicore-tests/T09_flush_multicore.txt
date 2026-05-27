@@ -1,0 +1,20 @@
+# T09 — Flush in multi-core context
+# core.flush() notifies the directory after removing the block.
+# Directory transitions M→I so the next reader correctly fetches from memory.
+#
+# Expected step times:
+#   step 0: Core 0 W 00000050, miss I→M      bus(5) + L2-miss(1016)                      = 1021
+#   step 1: Core 0 F 00000050, dirty flush    2 × (mem(1000) + L2-clean(0) + L1-write(1)) = 2002
+#              L1 and L2 both lose the block; directory updated: M→I
+#   step 2: Core 0 F 00000800, cold flush     L1-miss(1) + L2-miss(16) + mem(1000)        = 1017
+#              Address never cached; state was I so directory is not notified
+#   step 3: Core 1 R 00000050, miss I→S      bus(5) + L2-miss(1016)                      = 1021
+#              Directory shows I → fetch from memory → L2 miss → memory
+#   step 4: Core 1 R 00000050, hit S          local                                       =    1
+# Total cycles = 1021 + 2002 + 1017 + 1021 + 1 = 5062
+
+0 00000050 W
+0 00000050 F
+0 00000800 F
+1 00000050 R
+1 00000050 R

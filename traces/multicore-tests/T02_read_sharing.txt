@@ -1,0 +1,13 @@
+# T02 — Two cores reading the same block (S state sharing)
+#
+# Expected step times:
+#   step 0: Core 0 R, miss I→S   bus(5) + L2-miss(1016) = 1021
+#   step 1: Core 1 R, miss I→S   bus(5) + L2-hit(16)    =   21  (L2 populated by step 0)
+#   step 2: Core 0 R, hit  S     local read              =    1
+#   step 3: Core 1 R, hit  S     local read              =    1
+# Total = 1044
+
+0 00000000 R
+1 00000000 R
+0 00000000 R
+1 00000000 R
