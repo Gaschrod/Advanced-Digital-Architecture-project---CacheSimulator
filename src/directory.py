@@ -12,9 +12,9 @@ class Directory:
 
     The directory tracks per-block state and sends targeted point-to-point
     messages directly to the relevant caches:
-    - Fetch    : sent to M-state owner on BusRd   → owner transitions M → S, supplies data
-    - FetchInv : sent to M-state owner on BusRdX  → owner transitions M → I, supplies data
-    - Inv      : sent to each S-state sharer on BusRdX or BusUpgr → sharer transitions S → I
+    - Fetch    : sent to M-state owner on a GetS request     → owner transitions M → S, supplies data
+    - FetchInv : sent to M-state owner on a GetM request     → owner transitions M → I, supplies data
+    - Inv      : sent to each S-state sharer on a GetM or Upgrade request → sharer transitions S → I
     """
 
     def __init__(self, logger):
@@ -34,19 +34,19 @@ class Directory:
         return self.entries[address]
 
     def process_read(self, requesting_core_id, address):
-        """Process BusRd from requesting_core_id (I --PrRd--> S).
+        """Process GetS from requesting_core_id (I --PrRd--> S).
 
         Directory transitions and messages sent:
         - Dir I → Dir S : no copies, fetch from memory, add requester as sharer
         - Dir S → Dir S : add requester as sharer, fetch from memory
         - Dir M → Dir S : send Fetch to owner (owner: M → S), add both as sharers
 
-        Returns: dict with 'source' key ('memory' or 'cache') for bus timing.
+        Returns: dict with 'source' key ('memory' or 'cache') for interconnect timing.
         """
         entry = self._get_entry(address)
 
         self.logger.info(
-            f"\t[Directory] Received BusRd for {address} from Core {requesting_core_id}"
+            f"\t[Directory] Received GetS for {address} from Core {requesting_core_id}"
         )
         self.logger.info(
             f"\t[Directory] State: {entry.state}, Sharers: {entry.sharers}, Owner: {entry.owner}"
@@ -83,19 +83,19 @@ class Directory:
             return {"source": "cache"}
 
     def process_write(self, requesting_core_id, address):
-        """Process BusRdX from requesting_core_id (I --PrWr--> M).
+        """Process GetM from requesting_core_id (I --PrWr--> M).
 
         Directory transitions and messages sent:
         - Dir I → Dir M : no copies, fetch from memory, requester becomes owner
         - Dir S → Dir M : send Inv to all sharers (S → I), fetch from memory, requester becomes owner
         - Dir M → Dir M : send FetchInv to owner (M → I), requester becomes new owner
 
-        Returns: dict with 'source' key ('memory' or 'cache') for bus timing.
+        Returns: dict with 'source' key ('memory' or 'cache') for interconnect timing.
         """
         entry = self._get_entry(address)
 
         self.logger.info(
-            f"\t[Directory] Received BusRdX for {address} from Core {requesting_core_id}"
+            f"\t[Directory] Received GetM for {address} from Core {requesting_core_id}"
         )
         self.logger.info(
             f"\t[Directory] State: {entry.state}, Sharers: {entry.sharers}, Owner: {entry.owner}"
@@ -142,7 +142,7 @@ class Directory:
             return {"source": "cache"}
 
     def process_upgrade(self, requesting_core_id, address):
-        """Process BusUpgr from requesting_core_id (S --PrWr--> M).
+        """Process Upgrade from requesting_core_id (S --PrWr--> M).
 
         Directory transition and messages sent:
         - Dir S → Dir M : send Inv to all other sharers (S → I), requester becomes owner
@@ -151,7 +151,7 @@ class Directory:
         entry = self._get_entry(address)
 
         self.logger.info(
-            f"\t[Directory] Received BusUpgr for {address} from Core {requesting_core_id}"
+            f"\t[Directory] Received Upgrade for {address} from Core {requesting_core_id}"
         )
 
         if requesting_core_id not in entry.sharers:
@@ -162,7 +162,7 @@ class Directory:
 
         if entry.state != "S":
             self.logger.error(
-                f"\t[Directory] ERROR: BusUpgr but state is {entry.state}, not S!"
+                f"\t[Directory] ERROR: Upgrade but state is {entry.state}, not S!"
             )
             return
 

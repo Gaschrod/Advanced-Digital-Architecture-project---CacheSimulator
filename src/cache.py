@@ -581,7 +581,7 @@ class Cache:
 
     # ==================== Coherence Methods for Multi-Core ====================
     # Processor events : PrRd, PrWr
-    # Bus transactions : BusRd (read miss), BusRdX (write miss), BusUpgr (write hit on S), Flush (eviction/writeback)
+    # Request types    : GetS (read miss), GetM (write miss), Upgrade (write hit on S), Flush (eviction/writeback)
     # States           : M (Modified, exclusive dirty), S (Shared, clean), I (Invalid)
 
     def get_coherence_state(self, address):
@@ -594,11 +594,11 @@ class Cache:
         return self.data[index][tag].get_coherence_state()
 
     def invalidate_block(self, address):
-        """Invalidate a block on a bus-triggered coherence message.
+        """Invalidate a block on a directory-triggered coherence message.
 
-        - BusRdX (via Inv)     : S → I
-        - BusRdX (via FetchInv): M → I
-        - BusUpgr (via Inv)    : S → I
+        - GetM (via Inv)     : S → I
+        - GetM (via FetchInv): M → I
+        - Upgrade (via Inv)  : S → I
         """
 
         block_offset, index, tag = self.parse_address(address)
@@ -612,7 +612,7 @@ class Cache:
             del self.data[index][tag]
 
     def downgrade_to_shared(self, address):
-        """Downgrade block from Modified to Shared on BusRd intervention (M → S, Flush)."""
+        """Downgrade block from Modified to Shared on GetS intervention (M → S, Flush)."""
         block_offset, index, tag = self.parse_address(address)
 
         if index in self.data and tag in self.data[index]:
@@ -623,7 +623,7 @@ class Cache:
             self.data[index][tag].clean()  # No longer dirty
 
     def upgrade_to_modified(self, address):
-        """Upgrade block from Shared to Modified on BusUpgr (S → M, no data fetch)."""
+        """Upgrade block from Shared to Modified on Upgrade request (S → M, no data fetch)."""
         block_offset, index, tag = self.parse_address(address)
 
         if index in self.data and tag in self.data[index]:
@@ -676,7 +676,7 @@ class Cache:
         return eviction_result
 
     def supply_data(self, address):
-        """Supply data to the bus during Flush intervention (BusRd M→S or BusRdX M→I)."""
+        """Supply data during Flush intervention (GetS M→S or GetM M→I)."""
         block_offset, index, tag = self.parse_address(address)
 
         if index in self.data and tag in self.data[index]:
@@ -701,7 +701,7 @@ class Cache:
             return response.Response({self.name: False}, 0)
 
     def local_write(self, address, current_step):
-        """Perform a local write after coherence is satisfied (PrWr hit: M→M, or after BusRdX/BusUpgr installs M)."""
+        """Perform a local write after coherence is satisfied (PrWr hit: M→M, or after GetM/Upgrade installs M)."""
         block_offset, index, tag = self.parse_address(address)
 
         if index in self.data and tag in self.data[index]:

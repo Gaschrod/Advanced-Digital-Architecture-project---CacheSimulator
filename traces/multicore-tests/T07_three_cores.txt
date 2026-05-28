@@ -2,17 +2,17 @@
 # Uses 3 cores (run with -n 3). Address 00000070 (L1 set 7).
 #
 # Expected step times:
-#   step 0: Core 0 R,  miss I→S           bus(5) + L2-miss(1016) = 1021
-#   step 1: Core 1 R,  miss I→S           bus(5) + L2-hit(16)    =   21
-#   step 2: Core 2 R,  miss I→S           bus(5) + L2-hit(16)    =   21
+#   step 0: Core 0 R,  miss I→S           ic(5) + L2-miss(1016) = 1021
+#   step 1: Core 1 R,  miss I→S           ic(5) + L2-hit(16)    =   21
+#   step 2: Core 2 R,  miss I→S           ic(5) + L2-hit(16)    =   21
 #              directory: S, sharers={0,1,2}
-#   step 3: Core 0 W,  upgrade S→M        bus(5)                  =    5
+#   step 3: Core 0 W,  upgrade S→M        ic(5)                  =    5
 #              (invalidates Core 1 and Core 2)
-#   step 4: Core 1 R,  miss I→S (c2c)     bus(5) + c2c(10)        =   15
+#   step 4: Core 1 R,  miss I→S (c2c)     ic(5) + c2c(10)        =   15
 #              (Core 0 in M, supplies data, M→S; sharers={0,1})
-#   step 5: Core 2 R,  miss I→S           bus(5) + L2-hit(16)    =   21
+#   step 5: Core 2 R,  miss I→S           ic(5) + L2-hit(16)    =   21
 #              (Core 2 was invalidated, dir now S; fetch_from_shared → L2 hit)
-#   step 6: Core 1 W,  upgrade S→M        bus(5)                  =    5
+#   step 6: Core 1 W,  upgrade S→M        ic(5)                  =    5
 #              (invalidates Core 0 and Core 2)
 # Total = 1109
 

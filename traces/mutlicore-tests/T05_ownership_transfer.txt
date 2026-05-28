@@ -3,11 +3,11 @@
 # Core 1 writes again (local M hit), Core 0 writes (M→M back).
 #
 # Expected step times:
-#   step 0: Core 0 W,  miss I→M           bus(5) + L2-miss(1016) = 1021
-#   step 1: Core 1 W,  miss I→M           bus(5) + c2c(10)        =   15
+#   step 0: Core 0 W,  miss I→M           ic(5) + L2-miss(1016) = 1021
+#   step 1: Core 1 W,  miss I→M           ic(5) + c2c(10)        =   15
 #              (Core 0 supplies, M→I; Core 1 becomes owner in M)
 #   step 2: Core 1 W,  hit  M             local                   =    1
-#   step 3: Core 0 W,  miss I→M           bus(5) + c2c(10)        =   15
+#   step 3: Core 0 W,  miss I→M           ic(5) + c2c(10)        =   15
 #              (Core 1 supplies, M→I; Core 0 becomes owner in M)
 #   step 4: Core 0 R,  hit  M             local                   =    1
 # Total = 1053
