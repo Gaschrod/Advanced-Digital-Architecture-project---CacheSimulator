@@ -3,12 +3,12 @@
 # write is a 15-cycle cache-to-cache ownership transfer.
 #
 # Expected step times:
-#   step 0: Core 0 W,  miss I→M           bus(5) + L2-miss(1016) = 1021
-#   step 1: Core 1 W,  miss I→M (c2c)     bus(5) + c2c(10)        =   15
-#   step 2: Core 0 W,  miss I→M (c2c)     bus(5) + c2c(10)        =   15
-#   step 3: Core 1 W,  miss I→M (c2c)     bus(5) + c2c(10)        =   15
-#   step 4: Core 0 W,  miss I→M (c2c)     bus(5) + c2c(10)        =   15
-#   step 5: Core 1 W,  miss I→M (c2c)     bus(5) + c2c(10)        =   15
+#   step 0: Core 0 W,  miss I→M           ic(5) + L2-miss(1016) = 1021
+#   step 1: Core 1 W,  miss I→M (c2c)     ic(5) + c2c(10)        =   15
+#   step 2: Core 0 W,  miss I→M (c2c)     ic(5) + c2c(10)        =   15
+#   step 3: Core 1 W,  miss I→M (c2c)     ic(5) + c2c(10)        =   15
+#   step 4: Core 0 W,  miss I→M (c2c)     ic(5) + c2c(10)        =   15
+#   step 5: Core 1 W,  miss I→M (c2c)     ic(5) + c2c(10)        =   15
 # Total = 1096
 
 0 00000060 W

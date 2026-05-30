@@ -2,7 +2,7 @@
 
 import yaml, cache, argparse, logging, pprint
 from terminaltables.other_tables import UnixTable
-import core, bus, directory
+import core, directory
 
 """Cache simulator main module.
 
@@ -645,7 +645,7 @@ def build_multicore_hierarchy(configs, logger, policy, num_cores=2):
         num_cores: Number of CPU cores (default: 2)
 
     Returns:
-        hierarchy dict containing cores, caches, directory, and bus
+        hierarchy dict containing cores, caches, and directory
     """
     hierarchy = {}
 
@@ -664,13 +664,10 @@ def build_multicore_hierarchy(configs, logger, policy, num_cores=2):
     hierarchy["cache_2"] = cache_2
     prev_level = cache_2
 
-    # Create directory controller
-    dir_controller = directory.Directory(logger)
+    # Create directory controller (coordinates coherence + data transfer over
+    # the shared cache; cores talk to it directly)
+    dir_controller = directory.Directory(prev_level, logger)
     hierarchy["directory"] = dir_controller
-
-    # Create bus
-    system_bus = bus.Bus(dir_controller, prev_level, logger)
-    hierarchy["bus"] = system_bus
 
     # Build cores with private L1 caches
     cores = []
@@ -682,7 +679,7 @@ def build_multicore_hierarchy(configs, logger, policy, num_cores=2):
         )
 
         # Create core
-        cpu_core = core.Core(i, l1_cache, system_bus, logger)
+        cpu_core = core.Core(i, l1_cache, dir_controller, logger)
         cores.append(cpu_core)
 
         hierarchy[f"core_{i}"] = cpu_core
