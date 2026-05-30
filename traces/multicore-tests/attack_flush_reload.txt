@@ -1,0 +1,9 @@
+# Flush & Reload — multicore test
+# Attacker: core 0 flushes targets, Victim: core 1 accesses them,
+# Attacker then reloads to measure LLC vs memory timing.
+0 00000000 F ATTACKER
+0 00000080 F ATTACKER
+1 00000000 R VICTIM
+1 00000080 R VICTIM
+0 00000000 R ATTACKER
+0 00000080 R ATTACKER

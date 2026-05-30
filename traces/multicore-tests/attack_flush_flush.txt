@@ -1,0 +1,6 @@
+# Flush & Flush — multicore test
+# Attacker: core 0 flushes target twice with a victim access in-between.
+# The second flush is the probe.
+0 00000010 F ATTACKER
+1 00000010 R VICTIM
+0 00000010 F ATTACKER

@@ -1,0 +1,10 @@
+# Prime & Probe — multicore test
+# Attacker: core 0, Victim: core 1
+# Prime: core 0 fills a set with two addresses (associativity = 2)
+# Victim: core 1 accesses another address mapping to same set (evicts one)
+# Probe: core 0 re-accesses the same addresses to detect evictions
+0 00000000 R ATTACKER
+0 00000080 R ATTACKER
+1 00000100 W VICTIM
+0 00000000 R ATTACKER
+0 00000080 R ATTACKER
