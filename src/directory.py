@@ -1,3 +1,6 @@
+import response
+
+
 class DirectoryEntry:
     """Directory entry for tracking a single cache block's coherence state"""
 
@@ -10,17 +13,27 @@ class DirectoryEntry:
 class Directory:
     """Centralized coherence controller implementing MSI protocol.
 
-    The directory tracks per-block state and sends targeted point-to-point
-    messages directly to the relevant caches:
+    The directory is the full transaction coordinator: cores send their requests
+    (GetS, GetM, Upgrade) directly to it. It tracks per-block state, sends
+    targeted point-to-point messages to the relevant caches, fetches data from
+    the shared cache / memory when needed, installs the block in the requesting
+    core's L1, and returns timing information.
+
+    Coherence messages sent directly to caches:
     - Fetch    : sent to M-state owner on a GetS request     → owner transitions M → S, supplies data
     - FetchInv : sent to M-state owner on a GetM request     → owner transitions M → I, supplies data
     - Inv      : sent to each S-state sharer on a GetM or Upgrade request → sharer transitions S → I
     """
 
-    def __init__(self, logger):
+    def __init__(self, shared_cache, logger):
         self.entries = {}  # address -> DirectoryEntry
         self.cores = {}  # core_id -> Core, populated via register_core
+        self.shared_cache = shared_cache  # Shared L2 cache / memory
         self.logger = logger
+        self.transaction_time = 5  # Transaction overhead in cycles
+        self.cache_to_cache_time = (
+            10  # Extra latency when data comes from another cache
+        )
 
     def register_core(self, core):
         """Register a core so the directory can send it messages."""
@@ -33,7 +46,7 @@ class Directory:
             self.entries[address] = DirectoryEntry()
         return self.entries[address]
 
-    def process_read(self, requesting_core_id, address):
+    def process_read(self, requesting_core_id, address, current_step):
         """Process GetS from requesting_core_id (I --PrRd--> S).
 
         Directory transitions and messages sent:
@@ -41,7 +54,9 @@ class Directory:
         - Dir S → Dir S : add requester as sharer, fetch from memory
         - Dir M → Dir S : send Fetch to owner (owner: M → S), add both as sharers
 
-        Returns: dict with 'source' key ('memory' or 'cache') for interconnect timing.
+        Fetches data, installs the block in the requester's L1 in Shared state.
+
+        Returns: Response object with timing information.
         """
         entry = self._get_entry(address)
 
@@ -59,7 +74,7 @@ class Directory:
             self.logger.info(
                 f"\t[Directory] I → S, Core {requesting_core_id} added to sharers"
             )
-            return {"source": "memory"}
+            source = "memory"
 
         elif entry.state == "S":
             # Dir S → Dir S : add requester as sharer, fetch from memory
@@ -67,7 +82,7 @@ class Directory:
             self.logger.info(
                 f"\t[Directory] S → S, Core {requesting_core_id} added to sharers"
             )
-            return {"source": "memory"}
+            source = "memory"
 
         elif entry.state == "M":
             # Dir M → Dir S : send Fetch to owner
@@ -80,9 +95,13 @@ class Directory:
             self.logger.info(
                 f"\t[Directory] M → S, Core {requesting_core_id} added as sharer"
             )
-            return {"source": "cache"}
+            source = "cache"
 
-    def process_write(self, requesting_core_id, address):
+        return self._complete_transaction(
+            requesting_core_id, address, "S", source, current_step
+        )
+
+    def process_write(self, requesting_core_id, address, current_step):
         """Process GetM from requesting_core_id (I --PrWr--> M).
 
         Directory transitions and messages sent:
@@ -90,7 +109,9 @@ class Directory:
         - Dir S → Dir M : send Inv to all sharers (S → I), fetch from memory, requester becomes owner
         - Dir M → Dir M : send FetchInv to owner (M → I), requester becomes new owner
 
-        Returns: dict with 'source' key ('memory' or 'cache') for interconnect timing.
+        Fetches data, installs the block in the requester's L1 in Modified state.
+
+        Returns: Response object with timing information.
         """
         entry = self._get_entry(address)
 
@@ -108,7 +129,7 @@ class Directory:
             self.logger.info(
                 f"\t[Directory] I → M, Core {requesting_core_id} becomes owner"
             )
-            return {"source": "memory"}
+            source = "memory"
 
         elif entry.state == "S":
             # Dir S → Dir M : send Inv to all sharers (S → I), fetch from memory
@@ -124,7 +145,7 @@ class Directory:
             self.logger.info(
                 f"\t[Directory] S → M, Core {requesting_core_id} becomes owner"
             )
-            return {"source": "memory"}
+            source = "memory"
 
         elif entry.state == "M":
             # Dir M → Dir M : send FetchInv to current owner (M → I), requester becomes new owner
@@ -139,14 +160,22 @@ class Directory:
             self.logger.info(
                 f"\t[Directory] M → M, Core {requesting_core_id} becomes new owner"
             )
-            return {"source": "cache"}
+            source = "cache"
 
-    def process_upgrade(self, requesting_core_id, address):
+        return self._complete_transaction(
+            requesting_core_id, address, "M", source, current_step
+        )
+
+    def process_upgrade(self, requesting_core_id, address, current_step):
         """Process Upgrade from requesting_core_id (S --PrWr--> M).
 
         Directory transition and messages sent:
         - Dir S → Dir M : send Inv to all other sharers (S → I), requester becomes owner
           (no data fetch — requester already holds a valid S copy)
+
+        Upgrades the requester's local block to Modified (no data fetch needed).
+
+        Returns: Response object with timing information.
         """
         entry = self._get_entry(address)
 
@@ -158,13 +187,21 @@ class Directory:
             self.logger.error(
                 f"\t[Directory] ERROR: Core {requesting_core_id} not in sharers for {address}!"
             )
-            return
+            # Preserve legacy behavior: still upgrade the local block.
+            self.cores[requesting_core_id].l1_cache.upgrade_to_modified(address)
+            return response.Response(
+                {f"core_{requesting_core_id}_L1": True}, self.transaction_time
+            )
 
         if entry.state != "S":
             self.logger.error(
                 f"\t[Directory] ERROR: Upgrade but state is {entry.state}, not S!"
             )
-            return
+            # Preserve legacy behavior: still upgrade the local block.
+            self.cores[requesting_core_id].l1_cache.upgrade_to_modified(address)
+            return response.Response(
+                {f"core_{requesting_core_id}_L1": True}, self.transaction_time
+            )
 
         # Send Inv to all other sharers (S → I)
         for sharer_id in list(entry.sharers):
@@ -179,6 +216,51 @@ class Directory:
         entry.owner = requesting_core_id
         self.logger.info(
             f"\t[Directory] S → M, Core {requesting_core_id} becomes owner"
+        )
+
+        # S → M : upgrade local block (no data fetch needed)
+        self.cores[requesting_core_id].l1_cache.upgrade_to_modified(address)
+
+        return response.Response(
+            {f"core_{requesting_core_id}_L1": True}, self.transaction_time
+        )
+
+    def _complete_transaction(
+        self, requesting_core_id, address, install_state, source, current_step
+    ):
+        """Fetch data, install the block in the requester's L1, and tally timing.
+
+        Shared tail for GetS / GetM once coherence has been resolved:
+        - account for the transaction overhead;
+        - read from the shared cache / memory when the data comes from memory,
+          or charge the cache-to-cache transfer latency otherwise;
+        - install the block in the requesting core's L1 in `install_state`,
+          forwarding any eviction back to the directory.
+
+        Returns: Response object with timing information.
+        """
+        total_time = self.transaction_time
+
+        if source == "memory":
+            # Data comes from shared cache / memory
+            r = self.shared_cache.read(address, current_step)
+            total_time += r.time
+        else:
+            # Data comes from the former owner (cache-to-cache transfer)
+            total_time += self.cache_to_cache_time
+
+        # Install block in the requesting core's L1
+        requesting_core = self.cores[requesting_core_id]
+        eviction = requesting_core.l1_cache.install_block(
+            address, install_state, current_step
+        )
+        if eviction is not None:
+            evicted_addr, evicted_state, evicted_dirty, wb_time = eviction
+            total_time += wb_time
+            self.process_eviction(requesting_core_id, evicted_addr, evicted_dirty)
+
+        return response.Response(
+            {f"core_{requesting_core_id}_L1": False}, total_time
         )
 
     def process_eviction(self, core_id, address, is_dirty):

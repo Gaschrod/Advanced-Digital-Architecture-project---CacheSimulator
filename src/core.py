@@ -1,14 +1,14 @@
 class Core:
     """Represents a single CPU core with private L1 cache"""
 
-    def __init__(self, core_id, l1_cache, interconnect, logger):
+    def __init__(self, core_id, l1_cache, directory, logger):
         self.core_id = core_id
         self.l1_cache = l1_cache
-        self.interconnect = interconnect
+        self.directory = directory
         self.logger = logger
 
-        # Register this core with the interconnect (which also registers it with the directory)
-        self.interconnect.register_core(self)
+        # Register this core directly with the directory
+        self.directory.register_core(self)
 
     def read(self, address, current_step):
         """Process a read request (PrRd) from this core.
@@ -25,13 +25,13 @@ class Core:
         self.logger.info(f"\t[Core {self.core_id}] PrRd {address}, L1 state: {state}")
 
         if state in ["M", "S"]:
-            # M --PrRd--> M  /  S --PrRd--> S : hit, no interconnect transaction needed
+            # M --PrRd--> M  /  S --PrRd--> S : hit, no directory transaction needed
             self.logger.info(f"\t[Core {self.core_id}] L1 hit in state {state}")
             return self.l1_cache.local_read(address, current_step)
         else:
             # I --PrRd--> S : miss, send GetS to directory
             self.logger.info(f"\t[Core {self.core_id}] L1 miss, issuing GetS")
-            return self.interconnect.coherent_read(self.core_id, address, current_step)
+            return self.directory.process_read(self.core_id, address, current_step)
 
     def write(self, address, current_step):
         """Process a write request (PrWr) from this core.
@@ -55,9 +55,9 @@ class Core:
         elif state == "S":
             # S --PrWr--> M : hit, send Upgrade to directory
             self.logger.info(f"\t[Core {self.core_id}] L1 hit in state S, issuing Upgrade")
-            r = self.interconnect.coherent_upgrade(self.core_id, address, current_step)
+            r = self.directory.process_upgrade(self.core_id, address, current_step)
             # Update block metadata (LRU/NRU timestamps, access count, dirty bit).
-            # The interconnect transaction time already covers the write; the local_write
+            # The directory transaction time already covers the write; the local_write
             # response is intentionally discarded.
             _ = self.l1_cache.local_write(address, current_step)
             return r
@@ -65,9 +65,9 @@ class Core:
         else:
             # I --PrWr--> M : miss, send GetM to directory
             self.logger.info(f"\t[Core {self.core_id}] L1 miss, issuing GetM")
-            r = self.interconnect.coherent_write(self.core_id, address, current_step)
+            r = self.directory.process_write(self.core_id, address, current_step)
             # Update block metadata (LRU/NRU timestamps, access count, dirty bit).
-            # The interconnect transaction time already covers the write; the local_write
+            # The directory transaction time already covers the write; the local_write
             # response is intentionally discarded.
             _ = self.l1_cache.local_write(address, current_step)
             return r
@@ -83,7 +83,7 @@ class Core:
         state = self.l1_cache.get_coherence_state(address)
         r = self.l1_cache.flush(address, current_step)
         if state != "I":
-            self.interconnect.directory.process_eviction(self.core_id, address, state == "M")
+            self.directory.process_eviction(self.core_id, address, state == "M")
         return r
 
     def flush_all(self, current_step):
@@ -99,7 +99,7 @@ class Core:
         r = self.l1_cache.flush_all(current_step)
         for addr, state, is_dirty in blocks:
             if state != "I":
-                self.interconnect.directory.process_eviction(self.core_id, addr, is_dirty)
+                self.directory.process_eviction(self.core_id, addr, is_dirty)
         return r
 
     # ── Messages received from the directory ──────────────────────────────────
