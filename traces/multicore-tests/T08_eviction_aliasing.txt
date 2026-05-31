@@ -4,15 +4,15 @@
 # Note: eviction does NOT notify the directory (known limitation).
 #
 # Expected step times:
-#   step 0: Core 0 R 00000000, miss I→S  bus(5) + L2-miss(1016) = 1021
-#   step 1: Core 0 R 00000080, miss I→S  bus(5) + L2-miss(1016) = 1021
+#   step 0: Core 0 R 00000000, miss I→S  ic(5) + L2-miss(1016) = 1021
+#   step 1: Core 0 R 00000080, miss I→S  ic(5) + L2-miss(1016) = 1021
 #              L1 set 0: [00000000 (S, lru=0), 00000080 (S, lru=1)] — full
-#   step 2: Core 1 R 00000000, miss I→S  bus(5) + L2-hit(16)    =   21
+#   step 2: Core 1 R 00000000, miss I→S  ic(5) + L2-hit(16)    =   21
 #              Core 1 installs 00000000 in S; dir sharers={0,1}
-#   step 3: Core 0 R 00000100, miss I→S  bus(5) + L2-miss(1016) = 1021
+#   step 3: Core 0 R 00000100, miss I→S  ic(5) + L2-miss(1016) = 1021
 #              L1 set 0 full → evict LRU (00000000, lru=0)
 #              Core 0 L1 no longer has 00000000. Dir NOT notified.
-#   step 4: Core 0 R 00000000, miss I→S  bus(5) + L2-hit(16)    =   21
+#   step 4: Core 0 R 00000000, miss I→S  ic(5) + L2-hit(16)    =   21
 #              Core 0 state=I, dir still S sharers={0,1}
 #              action: fetch_from_shared → L2 hit (L2 retained 00000000)
 #              (Dir stale: thinks Core 0 still has it, but eviction wasn't reported)

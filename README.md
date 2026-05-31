@@ -10,4 +10,4 @@ CacheSimulator needs two extra Python modules: pyyaml and terminaltables
 
 These can both be installed using pip:
 
-    sudo pip install pyyaml/terminaltables
+    pip install pyyaml terminaltables

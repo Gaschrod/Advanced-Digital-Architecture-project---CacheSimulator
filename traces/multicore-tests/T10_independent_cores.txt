@@ -3,10 +3,10 @@
 # Each core should see only its own misses and hits, zero interventions.
 #
 # Expected step times:
-#   step 0: Core 0 R 00000000, miss I→S  bus(5) + L2-miss(1016) = 1021
-#   step 1: Core 1 R 00000010, miss I→S  bus(5) + L2-miss(1016) = 1021
-#   step 2: Core 0 W 00000000, upgrade   bus(5)                  =    5
-#   step 3: Core 1 W 00000010, upgrade   bus(5)                  =    5
+#   step 0: Core 0 R 00000000, miss I→S  ic(5) + L2-miss(1016) = 1021
+#   step 1: Core 1 R 00000010, miss I→S  ic(5) + L2-miss(1016) = 1021
+#   step 2: Core 0 W 00000000, upgrade   ic(5)                  =    5
+#   step 3: Core 1 W 00000010, upgrade   ic(5)                  =    5
 #   step 4: Core 0 W 00000000, hit M     local                   =    1
 #   step 5: Core 1 W 00000010, hit M     local                   =    1
 #   step 6: Core 0 R 00000000, hit M     local                   =    1
