@@ -1,9 +1,10 @@
-# Flush & Reload — multicore test
+# Flush & Reload — multicore test (adapted for multilevel.config)
 # Attacker: core 0 flushes targets, Victim: core 1 accesses them,
-# Attacker then reloads to measure LLC vs memory timing.
+# Attacker then reloads to measure shared-L2 vs memory timing.
+# Using addresses that map to the same L2 set (offset_bits=4, index_bits=4)
 0 00000000 F ATTACKER
-0 00000080 F ATTACKER
+0 00000100 F ATTACKER
 1 00000000 R VICTIM
-1 00000080 R VICTIM
+1 00000100 R VICTIM
 0 00000000 R ATTACKER
-0 00000080 R ATTACKER
+0 00000100 R ATTACKER

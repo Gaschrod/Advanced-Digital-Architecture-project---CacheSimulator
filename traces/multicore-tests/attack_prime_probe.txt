@@ -1,10 +1,17 @@
-# Prime & Probe — multicore test
+# Prime & Probe — multicore test (adapted for multilevel.config)
 # Attacker: core 0, Victim: core 1
-# Prime: core 0 fills a set with two addresses (associativity = 2)
+# Prime: core 0 fills a shared-L2 set (associativity = 4 in multilevel.config)
 # Victim: core 1 accesses another address mapping to same set (evicts one)
 # Probe: core 0 re-accesses the same addresses to detect evictions
+# Prime phase (4 addresses to fill the set)
 0 00000000 R ATTACKER
-0 00000080 R ATTACKER
-1 00000100 W VICTIM
+0 00000100 R ATTACKER
+0 00000200 R ATTACKER
+0 00000300 R ATTACKER
+# Victim access (different tag in same set)
+1 00000400 W VICTIM
+# Probe phase (re-check the same primed addresses)
 0 00000000 R ATTACKER
-0 00000080 R ATTACKER
+0 00000100 R ATTACKER
+0 00000200 R ATTACKER
+0 00000300 R ATTACKER
